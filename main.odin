@@ -104,26 +104,34 @@ main :: proc() {
 	defer sdl.ReleaseGPUShader(device, frag_shader)
 
 	// Generate triangle vertex data
-
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
 	vertices := []Vertex {
-		{{0.0, 0.5, 0.0}, {1.0, 0.0, 0.0, 1.0}},
-		{{0.5, -0.5, 0.0}, {0.0, 1.0, 0.0, 1.0}},
-		{{-0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}},
+		{{-0.5, 0.5, 0.0}, {1.0, 0.0, 0.0, 1.0}}, // tl
+		{{0.5, 0.5, 0.0}, {0.0, 1.0, 0.0, 1.0}}, // tr
+		{{-0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}}, // bl
+		{{0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}}, // br
 	}
 	vertex_size := u32(len(vertices) * size_of(Vertex))
 
+	indices := []u16{0, 1, 2, 2, 1, 3}
+	index_size := u32(len(indices) * size_of(u16))
+
 	// 3. Create vertex buffer
 	vertex_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = vertex_size})
+	index_buffer := sdl.CreateGPUBuffer(device, {usage = {.INDEX}, size = index_size})
 
 	// 4. Upload vertex data to the vertex buffer
 	// 4.1 Create transfer buffer
-	transfer_buffer := sdl.CreateGPUTransferBuffer(device, {usage = .UPLOAD, size = vertex_size})
+	transfer_buffer := sdl.CreateGPUTransferBuffer(
+		device,
+		{usage = .UPLOAD, size = vertex_size + index_size},
+	)
 
 	// 4.2 Map Transfer buffer mem and copy it to the gpu
-	transfer_mem := sdl.MapGPUTransferBuffer(device, transfer_buffer, false)
+	transfer_mem := transmute([^]byte)sdl.MapGPUTransferBuffer(device, transfer_buffer, false)
 	mem.copy(transfer_mem, raw_data(vertices), int(vertex_size))
+	mem.copy(transfer_mem[int(vertex_size):], raw_data(indices), int(index_size))
 	sdl.UnmapGPUTransferBuffer(device, transfer_buffer)
 
 	// 4.3 Begin Copy pass
@@ -135,6 +143,13 @@ main :: proc() {
 		copy_pass,
 		{transfer_buffer = transfer_buffer, offset = 0},
 		{buffer = vertex_buffer, size = vertex_size, offset = 0},
+		false,
+	)
+
+	sdl.UploadToGPUBuffer(
+		copy_pass,
+		{transfer_buffer = transfer_buffer, offset = vertex_size},
+		{buffer = index_buffer, size = index_size, offset = 0},
 		false,
 	)
 
@@ -256,10 +271,14 @@ main :: proc() {
 				&(sdl.GPUBufferBinding{buffer = vertex_buffer}),
 				1,
 			)
+
+			sdl.BindGPUIndexBuffer(render_pass, {buffer = index_buffer}, ._16BIT)
+
 			// Bind uniform data
 			sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
 			// Draw calls
-			sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
+			// sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
+			sdl.DrawGPUIndexedPrimitives(render_pass, u32(len(indices)), 1, 0, 0, 0)
 
 			// 5. End Render pass
 			sdl.EndGPURenderPass(render_pass)
