@@ -1,12 +1,17 @@
 package game
 
 import "core:log"
+import "core:math/linalg"
 import "core:strings"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
 
 vert_shader_code := #load("shaders/basic.vert.hlsl", string)
 frag_shader_code := #load("shaders/basic.frag.hlsl", string)
+
+UniformBufferObject :: struct {
+	mvp: matrix[4, 4]f32,
+}
 
 compile_shader_stage :: proc(
 	raw_code: string,
@@ -111,6 +116,12 @@ main :: proc() {
 		vertex_shader = vertex_shader,
 		fragment_shader = frag_shader,
 		primitive_type = .TRIANGLELIST,
+		vertex_input_state = {
+			vertex_buffer_descriptions = nil,
+			num_vertex_buffers = 0,
+			vertex_attributes = nil,
+			num_vertex_attributes = 0,
+		},
 		target_info = sdl.GPUGraphicsPipelineTargetInfo {
 			num_color_targets = 1,
 			color_target_descriptions = &sdl.GPUColorTargetDescription {
@@ -120,12 +131,35 @@ main :: proc() {
 	}
 
 	pipeline := sdl.CreateGPUGraphicsPipeline(device, pipeline_info)
+
+	if pipeline == nil {
+		log.panicf("Failed to create graphics pipeline: %s", sdl.GetError())
+	}
 	defer sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
+
+	window_size: [2]i32
+	if !sdl.GetWindowSize(window, &window_size.x, &window_size.y) {
+		log.panicf("Failed to get window size: %s", sdl.GetError())
+	}
+
+	rotation: f32
+	proj_mat := linalg.matrix4_perspective_f32(
+		linalg.to_radians(f32(60)),
+		f32(window_size.x) / f32(window_size.y),
+		0.0001,
+		1000,
+	)
 
 	running := true
 	event: sdl.Event
 
+	last_ticks := sdl.GetTicks()
+
 	for running {
+		current_ticks := sdl.GetTicks()
+		delta_time := f32(current_ticks - last_ticks) / 1000
+		last_ticks = current_ticks
+
 		// Poll events
 		for sdl.PollEvent(&event) {
 			#partial switch event.type {
@@ -148,6 +182,15 @@ main :: proc() {
 		// 2. Acquire swapchain texture
 		swapchain_tex: ^sdl.GPUTexture
 
+		rotation += linalg.to_radians(f32(90)) * delta_time
+		model_mat :=
+			linalg.matrix4_translate_f32({0, 0, -5}) *
+			linalg.matrix4_rotate_f32(rotation, {0, 1, 0})
+
+		ubo := UniformBufferObject {
+			mvp = proj_mat * model_mat,
+		}
+
 		if sdl.WaitAndAcquireGPUSwapchainTexture(cmd_buffer, window, &swapchain_tex, nil, nil) {
 			// 3. Begin Render pass
 			color_target := sdl.GPUColorTargetInfo {
@@ -163,6 +206,7 @@ main :: proc() {
 			sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
 			// Bind vertex data
 			// Bind uniform data
+			sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
 			// Draw calls
 			sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
 

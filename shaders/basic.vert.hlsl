@@ -1,3 +1,7 @@
+cbuffer Uniform : register(b0, space1) {
+    float4x4 mvp;
+}
+
 struct VS_OUTPUT {
     float4 pos : SV_POSITION;
     float4 color : COLOR0;
@@ -21,7 +25,9 @@ VS_OUTPUT MainVS(uint vertexID : SV_VertexID) {
         float3(0.0, 0.0, 1.0)  // Blue
     };
 
-    output.pos = float4(positions[vertexID], 0.0, 1.0);
+    float4 local_pos = float4(positions[vertexID], 0.0, 1.0);
+
+    output.pos = mul(mvp, local_pos);
     output.color = float4(colors[vertexID], 1.0);
 
     return output;
