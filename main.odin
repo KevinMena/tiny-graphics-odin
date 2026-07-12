@@ -13,6 +13,10 @@ UniformBufferObject :: struct {
 	mvp: matrix[4, 4]f32,
 }
 
+sdl_assert :: proc(ok: bool) {
+	if !ok do log.panicf("SDL Error: %s", sdl.GetError())
+}
+
 compile_shader_stage :: proc(
 	raw_code: string,
 	entrypoint: cstring,
@@ -32,17 +36,17 @@ compile_shader_stage :: proc(
 	}
 
 	size: uint
-	spirv_bytecode := shadercross.CompileSPIRVFromHLSL(vertex_info, &size)
-
-	if spirv_bytecode == nil {
-		log.panicf("Failed to compile HLSL to SPIRV: %s", sdl.GetError())
-	}
+	spirv_bytecode := shadercross.CompileSPIRVFromHLSL(
+		vertex_info,
+		&size,
+	); sdl_assert(spirv_bytecode != nil)
 	defer sdl.free(rawptr(spirv_bytecode))
 
-	reflect := shadercross.ReflectGraphicsSPIRV(spirv_bytecode, size, prop_id)
-	if reflect == nil {
-		log.panicf("Failed to reflect graphics SPIRV: %s", sdl.GetError())
-	}
+	reflect := shadercross.ReflectGraphicsSPIRV(
+		spirv_bytecode,
+		size,
+		prop_id,
+	); sdl_assert(reflect != nil)
 	defer sdl.free(rawptr(reflect))
 
 	shader = shadercross.CompileGraphicsShaderFromSPIRV(
@@ -64,64 +68,38 @@ compile_shader_stage :: proc(
 main :: proc() {
 	context.logger = log.create_console_logger(); defer log.destroy_console_logger(context.logger)
 
-	if !sdl.Init({.VIDEO}) {
-		log.panicf("Failed to initialize SDL: %s", sdl.GetError())
-	}
+	sdl_ok := sdl.Init({.VIDEO}); sdl_assert(sdl_ok)
 	defer sdl.Quit()
 
 	// TODO: ADD .SPIRV WHEN TRYING TO WOKR WITH VULKAN
 	shader_formats: sdl.GPUShaderFormat = {.DXIL}
-	device := sdl.CreateGPUDevice(shader_formats, true, nil)
-
-	if device == nil {
-		log.panicf("Failed to create GPU device: %s", sdl.GetError())
-	}
+	device := sdl.CreateGPUDevice(shader_formats, true, nil); sdl_assert(device != nil)
 	defer sdl.DestroyGPUDevice(device)
 
 	//Shadercross setup for translating shaders
-	if !shadercross.Init() {
-		log.panicf("Failed to initialize Shadercross: %s", sdl.GetError())
-	}
+	shadercross_ok := shadercross.Init(); sdl_assert(shadercross_ok)
 	defer shadercross.Quit()
 
 	windows_flags: sdl.WindowFlags = {.RESIZABLE, .HIGH_PIXEL_DENSITY}
-	window := sdl.CreateWindow("SDL Test", 1280, 720, windows_flags)
-
-	if window == nil {
-		log.panicf("Failed to create window: %s", sdl.GetError())
-	}
+	window := sdl.CreateWindow("SDL Test", 1280, 720, windows_flags); sdl_assert(window != nil)
 	defer sdl.DestroyWindow(window)
 
-	if !sdl.ClaimWindowForGPUDevice(device, window) {
-		log.panicf("Failed to claim window: %s", sdl.GetError())
-	}
+	ok := sdl.ClaimWindowForGPUDevice(device, window); sdl_assert(ok)
 	defer sdl.ReleaseWindowFromGPUDevice(device, window)
 
 	// Testing shaders
 	vertex_shader := compile_shader_stage(vert_shader_code, cstring("MainVS"), .VERTEX, device)
-
-	if vertex_shader == nil {
-		log.panicf("Failed to compile vertex shader: %s", sdl.GetError())
-	}
+	sdl_assert(vertex_shader != nil)
 	defer sdl.ReleaseGPUShader(device, vertex_shader)
 
 	frag_shader := compile_shader_stage(frag_shader_code, cstring("MainPS"), .FRAGMENT, device)
-
-	if frag_shader == nil {
-		log.panicf("Failed to compile fragment shader: %s", sdl.GetError())
-	}
+	sdl_assert(frag_shader != nil)
 	defer sdl.ReleaseGPUShader(device, frag_shader)
 
 	pipeline_info := sdl.GPUGraphicsPipelineCreateInfo {
 		vertex_shader = vertex_shader,
 		fragment_shader = frag_shader,
 		primitive_type = .TRIANGLELIST,
-		vertex_input_state = {
-			vertex_buffer_descriptions = nil,
-			num_vertex_buffers = 0,
-			vertex_attributes = nil,
-			num_vertex_attributes = 0,
-		},
 		target_info = sdl.GPUGraphicsPipelineTargetInfo {
 			num_color_targets = 1,
 			color_target_descriptions = &sdl.GPUColorTargetDescription {
@@ -130,17 +108,11 @@ main :: proc() {
 		},
 	}
 
-	pipeline := sdl.CreateGPUGraphicsPipeline(device, pipeline_info)
-
-	if pipeline == nil {
-		log.panicf("Failed to create graphics pipeline: %s", sdl.GetError())
-	}
+	pipeline := sdl.CreateGPUGraphicsPipeline(device, pipeline_info); sdl_assert(pipeline != nil)
 	defer sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
 
 	window_size: [2]i32
-	if !sdl.GetWindowSize(window, &window_size.x, &window_size.y) {
-		log.panicf("Failed to get window size: %s", sdl.GetError())
-	}
+	ok = sdl.GetWindowSize(window, &window_size.x, &window_size.y); sdl_assert(ok)
 
 	rotation: f32
 	proj_mat := linalg.matrix4_perspective_f32(
