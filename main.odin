@@ -113,7 +113,7 @@ main :: proc() {
 	defer sdl.ReleaseGPUShader(device, frag_shader)
 
 	// Texture
-	texture_image := sdl_image.Load("./assets/cobblestone_1.png"); sdl_assert(texture_image != nil)
+	texture_image := sdl_image.Load("./assets/colormap.png"); sdl_assert(texture_image != nil)
 	tex_image_size := u32(texture_image.w * texture_image.h * 4)
 	texture := sdl.CreateGPUTexture(
 		device,
@@ -133,7 +133,7 @@ main :: proc() {
 
 	sdl.SetFloatProperty(depth_tex_props, sdl.PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_DEPTH_FLOAT, 1.0)
 
-	DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D16_UNORM
+	DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D32_FLOAT
 	depth_texture := sdl.CreateGPUTexture(
 		device,
 		{
@@ -151,19 +151,19 @@ main :: proc() {
 	// Generate triangle vertex data
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
-	vertices := []Vertex {
-		{{-0.5, 0.5, 0.0}, WHITE, {0, 0}}, // tl
-		{{0.5, 0.5, 0.0}, WHITE, {1, 0}}, // tr
-		{{-0.5, -0.5, 0.0}, WHITE, {0, 1}}, // bl
-		{{0.5, -0.5, 0.0}, WHITE, {1, 1}}, // br
-	}
+	// vertices := []Vertex {
+	// 	{{-0.5, 0.5, 0.0}, WHITE, {0, 0}}, // tl
+	// 	{{0.5, 0.5, 0.0}, WHITE, {1, 0}}, // tr
+	// 	{{-0.5, -0.5, 0.0}, WHITE, {0, 1}}, // bl
+	// 	{{0.5, -0.5, 0.0}, WHITE, {1, 1}}, // br
+	// }
 
-	indices := []u16{0, 1, 2, 2, 1, 3}
+	// indices := []u16{0, 1, 2, 2, 1, 3}
 
-	// vertices, indices := load_model("./assets/animal-penguin.glb")
+	vertices, indices := load_model("./assets/animal-penguin.glb")
 
 	vertex_size := u32(len(vertices) * size_of(Vertex))
-	index_size := u32(len(indices) * size_of(u16))
+	index_size := u32(len(indices) * size_of(u32))
 
 	// 3. Create vertex buffer
 	vertex_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = vertex_size})
@@ -291,7 +291,7 @@ main :: proc() {
 	proj_mat := linalg.matrix4_perspective_f32(
 		linalg.to_radians(f32(60)),
 		f32(window_size.x) / f32(window_size.y),
-		0.0001,
+		0.01,
 		1000,
 	)
 
@@ -365,7 +365,7 @@ main :: proc() {
 				1,
 			)
 
-			sdl.BindGPUIndexBuffer(render_pass, {buffer = index_buffer}, ._16BIT)
+			sdl.BindGPUIndexBuffer(render_pass, {buffer = index_buffer}, ._32BIT)
 
 			// Bind uniform data
 			sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
