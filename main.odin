@@ -6,8 +6,9 @@ import "core:mem"
 import "core:strings"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
+import sdl_image "vendor:sdl3/image"
 
-shader_code := #load("shaders/basic.hlsl", string)
+shader_code := #load("assets/shaders/basic.hlsl", string)
 
 UniformBufferObject :: struct {
 	mvp: matrix[4, 4]f32,
@@ -18,6 +19,7 @@ Vector3 :: [3]f32
 Vertex :: struct {
 	pos:   Vector3,
 	color: sdl.FColor,
+	uv:    [2]f32,
 }
 
 sdl_assert :: proc(ok: bool) {
@@ -73,7 +75,7 @@ compile_shader_stage :: proc(
 }
 
 main :: proc() {
-	context.logger = log.create_console_logger(); defer log.destroy_console_logger(context.logger)
+	context.logger = log.create_console_logger()
 
 	sdl_ok := sdl.Init({.VIDEO}); sdl_assert(sdl_ok)
 	defer sdl.Quit()
@@ -103,14 +105,29 @@ main :: proc() {
 	sdl_assert(frag_shader != nil)
 	defer sdl.ReleaseGPUShader(device, frag_shader)
 
+	// Texture
+	texture_image := sdl_image.Load("./assets/cobblestone_1.png"); sdl_assert(texture_image != nil)
+	tex_image_size := u32(texture_image.w * texture_image.h * 4)
+	texture := sdl.CreateGPUTexture(
+		device,
+		{
+			format = .R8G8B8A8_UNORM,
+			usage = {.SAMPLER},
+			width = u32(texture_image.w),
+			height = u32(texture_image.h),
+			layer_count_or_depth = 1,
+			num_levels = 1,
+		},
+	)
+
 	// Generate triangle vertex data
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
 	vertices := []Vertex {
-		{{-0.5, 0.5, 0.0}, {1.0, 0.0, 0.0, 1.0}}, // tl
-		{{0.5, 0.5, 0.0}, {0.0, 1.0, 0.0, 1.0}}, // tr
-		{{-0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}}, // bl
-		{{0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}}, // br
+		{{-0.5, 0.5, 0.0}, {1.0, 0.0, 0.0, 1.0}, {0, 0}}, // tl
+		{{0.5, 0.5, 0.0}, {0.0, 1.0, 0.0, 1.0}, {1, 0}}, // tr
+		{{-0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}, {0, 1}}, // bl
+		{{0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}, {1, 1}}, // br
 	}
 	vertex_size := u32(len(vertices) * size_of(Vertex))
 
@@ -128,11 +145,20 @@ main :: proc() {
 		{usage = .UPLOAD, size = vertex_size + index_size},
 	)
 
+	tex_transfer_buffer := sdl.CreateGPUTransferBuffer(
+		device,
+		{usage = .UPLOAD, size = tex_image_size},
+	)
+
 	// 4.2 Map Transfer buffer mem and copy it to the gpu
 	transfer_mem := transmute([^]byte)sdl.MapGPUTransferBuffer(device, transfer_buffer, false)
 	mem.copy(transfer_mem, raw_data(vertices), int(vertex_size))
 	mem.copy(transfer_mem[int(vertex_size):], raw_data(indices), int(index_size))
 	sdl.UnmapGPUTransferBuffer(device, transfer_buffer)
+
+	tex_transfer_mem := sdl.MapGPUTransferBuffer(device, tex_transfer_buffer, false)
+	mem.copy(tex_transfer_mem, texture_image.pixels, int(tex_image_size))
+	sdl.UnmapGPUTransferBuffer(device, tex_transfer_buffer)
 
 	// 4.3 Begin Copy pass
 	copy_cmd_buffer := sdl.AcquireGPUCommandBuffer(device)
@@ -153,12 +179,23 @@ main :: proc() {
 		false,
 	)
 
+	sdl.UploadToGPUTexture(
+		copy_pass,
+		{transfer_buffer = tex_transfer_buffer},
+		{texture = texture, w = u32(texture_image.w), h = u32(texture_image.h), d = 1},
+		false,
+	)
+
 	// 4.5 End copy pass and submit to gpu
 	sdl.EndGPUCopyPass(copy_pass)
 	ok = sdl.SubmitGPUCommandBuffer(copy_cmd_buffer); sdl_assert(ok)
 
 	//4.6 Release transfer buffer
 	sdl.ReleaseGPUTransferBuffer(device, transfer_buffer)
+	sdl.ReleaseGPUTransferBuffer(device, tex_transfer_buffer)
+
+	// Texture sampler
+	sampler := sdl.CreateGPUSampler(device, {})
 
 	vertex_attributes := []sdl.GPUVertexAttribute {
 		{
@@ -172,6 +209,12 @@ main :: proc() {
 			buffer_slot = 0,
 			format      = .FLOAT4,
 			offset      = u32(offset_of(Vertex, color)),
+		},
+		{
+			location    = 2, // Matches TEXCOORD1 (color)
+			buffer_slot = 0,
+			format      = .FLOAT2,
+			offset      = u32(offset_of(Vertex, uv)),
 		},
 	}
 
@@ -244,7 +287,7 @@ main :: proc() {
 
 		rotation += linalg.to_radians(f32(90)) * delta_time
 		model_mat :=
-			linalg.matrix4_translate_f32({0, 0, -5}) *
+			linalg.matrix4_translate_f32({0, 0, -2}) *
 			linalg.matrix4_rotate_f32(rotation, {0, 1, 0})
 
 		ubo := UniformBufferObject {
@@ -276,6 +319,13 @@ main :: proc() {
 
 			// Bind uniform data
 			sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
+			sdl.BindGPUFragmentSamplers(
+				render_pass,
+				0,
+				&(sdl.GPUTextureSamplerBinding{texture = texture, sampler = sampler}),
+				1,
+			)
+
 			// Draw calls
 			// sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
 			sdl.DrawGPUIndexedPrimitives(render_pass, u32(len(indices)), 1, 0, 0, 0)
