@@ -1,4 +1,4 @@
-package game
+package graphics
 
 import "core:log"
 import "core:math/linalg"
@@ -16,14 +16,15 @@ UniformBufferObject :: struct {
 
 Vector2 :: [2]f32
 Vector3 :: [3]f32
+Vector4 :: [4]f32
 
 Vertex :: struct {
 	pos:   Vector3,
-	color: sdl.FColor,
+	color: Vector4,
 	uv:    Vector2,
 }
 
-WHITE :: sdl.FColor{1, 1, 1, 1}
+WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
 
 sdl_assert :: proc(ok: bool) {
 	if !ok do log.panicf("SDL Error: %s", sdl.GetError())
@@ -99,6 +100,9 @@ main :: proc() {
 	ok := sdl.ClaimWindowForGPUDevice(device, window); sdl_assert(ok)
 	defer sdl.ReleaseWindowFromGPUDevice(device, window)
 
+	window_size: [2]i32
+	ok = sdl.GetWindowSize(window, &window_size.x, &window_size.y); sdl_assert(ok)
+
 	// Testing shaders
 	vertex_shader := compile_shader_stage(shader_code, cstring("MainVS"), .VERTEX, device)
 	sdl_assert(vertex_shader != nil)
@@ -122,6 +126,27 @@ main :: proc() {
 			num_levels = 1,
 		},
 	)
+	defer sdl.ReleaseGPUTexture(device, texture)
+
+	depth_tex_props := sdl.CreateProperties()
+	defer sdl.DestroyProperties(depth_tex_props)
+
+	sdl.SetFloatProperty(depth_tex_props, sdl.PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_DEPTH_FLOAT, 1.0)
+
+	DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D16_UNORM
+	depth_texture := sdl.CreateGPUTexture(
+		device,
+		{
+			format = DEPTH_TEXTURE_FORMAT,
+			usage = {.DEPTH_STENCIL_TARGET},
+			width = u32(window_size.x),
+			height = u32(window_size.y),
+			layer_count_or_depth = 1,
+			num_levels = 1,
+			props = depth_tex_props,
+		},
+	)
+	defer sdl.ReleaseGPUTexture(device, depth_texture)
 
 	// Generate triangle vertex data
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
@@ -132,14 +157,20 @@ main :: proc() {
 		{{-0.5, -0.5, 0.0}, WHITE, {0, 1}}, // bl
 		{{0.5, -0.5, 0.0}, WHITE, {1, 1}}, // br
 	}
-	vertex_size := u32(len(vertices) * size_of(Vertex))
 
 	indices := []u16{0, 1, 2, 2, 1, 3}
+
+	// vertices, indices := load_model("./assets/animal-penguin.glb")
+
+	vertex_size := u32(len(vertices) * size_of(Vertex))
 	index_size := u32(len(indices) * size_of(u16))
 
 	// 3. Create vertex buffer
 	vertex_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = vertex_size})
+	defer sdl.ReleaseGPUBuffer(device, vertex_buffer)
+
 	index_buffer := sdl.CreateGPUBuffer(device, {usage = {.INDEX}, size = index_size})
+	defer sdl.ReleaseGPUBuffer(device, index_buffer)
 
 	// 4. Upload vertex data to the vertex buffer
 	// 4.1 Create transfer buffer
@@ -197,8 +228,12 @@ main :: proc() {
 	sdl.ReleaseGPUTransferBuffer(device, transfer_buffer)
 	sdl.ReleaseGPUTransferBuffer(device, tex_transfer_buffer)
 
+	// delete(vertices)
+	// delete(indices)
+
 	// Texture sampler
 	sampler := sdl.CreateGPUSampler(device, {})
+	defer sdl.ReleaseGPUSampler(device, sampler)
 
 	vertex_attributes := []sdl.GPUVertexAttribute {
 		{
@@ -234,19 +269,23 @@ main :: proc() {
 			num_vertex_attributes = u32(len(vertex_attributes)),
 			vertex_attributes = raw_data(vertex_attributes),
 		},
+		depth_stencil_state = {
+			enable_depth_test = true,
+			enable_depth_write = true,
+			compare_op = .LESS,
+		},
 		target_info = sdl.GPUGraphicsPipelineTargetInfo {
 			num_color_targets = 1,
 			color_target_descriptions = &sdl.GPUColorTargetDescription {
 				format = sdl.GetGPUSwapchainTextureFormat(device, window),
 			},
+			has_depth_stencil_target = true,
+			depth_stencil_format = DEPTH_TEXTURE_FORMAT,
 		},
 	}
 
 	pipeline := sdl.CreateGPUGraphicsPipeline(device, pipeline_info); sdl_assert(pipeline != nil)
 	defer sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
-
-	window_size: [2]i32
-	ok = sdl.GetWindowSize(window, &window_size.x, &window_size.y); sdl_assert(ok)
 
 	rotation: f32
 	proj_mat := linalg.matrix4_perspective_f32(
@@ -290,7 +329,7 @@ main :: proc() {
 
 		rotation += linalg.to_radians(f32(90)) * delta_time
 		model_mat :=
-			linalg.matrix4_translate_f32({0, 0, -2}) *
+			linalg.matrix4_translate_f32({0, -1, -3}) *
 			linalg.matrix4_rotate_f32(rotation, {0, 1, 0})
 
 		ubo := UniformBufferObject {
@@ -305,7 +344,15 @@ main :: proc() {
 				load_op     = .CLEAR,
 				store_op    = .STORE,
 			}
-			render_pass := sdl.BeginGPURenderPass(cmd_buffer, &color_target, 1, nil)
+			depth_target_info := sdl.GPUDepthStencilTargetInfo {
+				texture          = depth_texture,
+				clear_depth      = 1.0,
+				load_op          = .CLEAR,
+				store_op         = .DONT_CARE,
+				stencil_load_op  = .DONT_CARE,
+				stencil_store_op = .DONT_CARE,
+			}
+			render_pass := sdl.BeginGPURenderPass(cmd_buffer, &color_target, 1, &depth_target_info)
 
 			// 4. Draw something
 			// Bind graphics pipeline
