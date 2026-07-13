@@ -14,13 +14,16 @@ UniformBufferObject :: struct {
 	mvp: matrix[4, 4]f32,
 }
 
+Vector2 :: [2]f32
 Vector3 :: [3]f32
 
 Vertex :: struct {
 	pos:   Vector3,
 	color: sdl.FColor,
-	uv:    [2]f32,
+	uv:    Vector2,
 }
+
+WHITE :: sdl.FColor{1, 1, 1, 1}
 
 sdl_assert :: proc(ok: bool) {
 	if !ok do log.panicf("SDL Error: %s", sdl.GetError())
@@ -124,10 +127,10 @@ main :: proc() {
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
 	vertices := []Vertex {
-		{{-0.5, 0.5, 0.0}, {1.0, 0.0, 0.0, 1.0}, {0, 0}}, // tl
-		{{0.5, 0.5, 0.0}, {0.0, 1.0, 0.0, 1.0}, {1, 0}}, // tr
-		{{-0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}, {0, 1}}, // bl
-		{{0.5, -0.5, 0.0}, {0.0, 0.0, 1.0, 1.0}, {1, 1}}, // br
+		{{-0.5, 0.5, 0.0}, WHITE, {0, 0}}, // tl
+		{{0.5, 0.5, 0.0}, WHITE, {1, 0}}, // tr
+		{{-0.5, -0.5, 0.0}, WHITE, {0, 1}}, // bl
+		{{0.5, -0.5, 0.0}, WHITE, {1, 1}}, // br
 	}
 	vertex_size := u32(len(vertices) * size_of(Vertex))
 
@@ -211,7 +214,7 @@ main :: proc() {
 			offset      = u32(offset_of(Vertex, color)),
 		},
 		{
-			location    = 2, // Matches TEXCOORD1 (color)
+			location    = 2, // Matches TEXCOORD2 (uv)
 			buffer_slot = 0,
 			format      = .FLOAT2,
 			offset      = u32(offset_of(Vertex, uv)),
