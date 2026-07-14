@@ -7,8 +7,8 @@ SamplerState main_sampler : register(s0, space2);
 
 struct VS_INPUT {
     float3 pos   : TEXCOORD0; // Maps to Attribute Location 0
-    float4 color : TEXCOORD1; // Maps to Attribute Location 1
-    float2 uv    : TEXCOORD2; // Maps to Attribute Location 2
+    float2 uv    : TEXCOORD1; // Maps to Attribute Location 1
+    float4 color : TEXCOORD2; // Maps to Attribute Location 2
 };
 
 struct VS_OUTPUT {

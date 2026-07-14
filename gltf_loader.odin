@@ -5,6 +5,17 @@ import "core:math/linalg"
 import "core:strings"
 import "vendor:cgltf"
 
+Mesh :: struct {
+	vertices: []Vector3,
+	uvs:      []Vector2,
+	colors:   []Vector4,
+	indices:  []u32,
+}
+
+Model :: struct {
+	meshes: []Mesh,
+}
+
 gltf_assert :: proc(ok: bool, message: string) {
 	if !ok do log.panicf(message)
 }
@@ -62,14 +73,14 @@ get_world_matrix :: proc(node: ^cgltf.node) -> linalg.Matrix4f32 {
 	return world_matrix
 }
 
-load_model :: proc(filepath: string) -> (vertices: [dynamic]Vertex, indices: [dynamic]u32) {
-	path := strings.clone_to_cstring(filepath, context.temp_allocator)
+load_model :: proc(file_path: string) -> (model: Model) {
+	c_file_path := strings.clone_to_cstring(file_path, context.temp_allocator)
 
 	// 1. Parse the JSON structure
 	options := cgltf.options{}
 	data, parse_result := cgltf.parse_file(
 		options,
-		path,
+		c_file_path,
 	); gltf_assert(parse_result == .success, "Failed to parse glTF file.")
 	defer cgltf.free(data)
 
@@ -82,7 +93,7 @@ load_model :: proc(filepath: string) -> (vertices: [dynamic]Vertex, indices: [dy
 	buffer_result := cgltf.load_buffers(
 		options,
 		data,
-		path,
+		c_file_path,
 	); gltf_assert(buffer_result == .success, "Failed to load glTF buffers.")
 
 	gltf_assert(
@@ -108,9 +119,9 @@ load_model :: proc(filepath: string) -> (vertices: [dynamic]Vertex, indices: [dy
 
 	log.debugf("Primitives (triangles only) count based on hierarchy : %i", primitives_count)
 
-	vertices = make([dynamic]Vertex)
-	indices = make([dynamic]u32)
+	model.meshes = make([]Mesh, primitives_count)
 
+	mesh_index: int
 	for i in 0 ..< len(data.nodes) {
 		node := data.nodes[i]
 		mesh := node.mesh
@@ -128,49 +139,55 @@ load_model :: proc(filepath: string) -> (vertices: [dynamic]Vertex, indices: [dy
 			// NOTE: Only support primitives defined by triangles
 			if primitive.type != .triangles do continue
 
-			vertex_count: uint = 0
-			for i in 0 ..< len(primitive.attributes) {
-				if primitive.attributes[i].type == .position {
-					vertex_count = primitive.attributes[i].data.count
-					break
-				}
-			}
-
-			base_vertex := u32(len(vertices))
-			resize(&vertices, len(vertices) + int(vertex_count))
-
-			// Pre-fill colors with White (in case the model doesn't have vertex colors exported)
-			for v in int(base_vertex) ..< len(vertices) do vertices[v].color = {1.0, 1.0, 1.0, 1.0}
-
 			// 3. Extract vertices data
 			for a in 0 ..< len(primitive.attributes) {
-				attributes := primitive.attributes[a]
-				accessor := attributes.data
+				attribute := primitive.attributes[a]
+				accessor := attribute.data
 
-				#partial switch attributes.type {
+				#partial switch attribute.type {
 				case .position:
-					// if vertices[index].pos != nil do log.warnf("[%s] Vertices attribute data already loaded", filepath)
-					for v in 0 ..< vertex_count {
-						val: Vector3
-						if cgltf.accessor_read_float(accessor, v, &val[0], 3) {
-							vertices[uint(base_vertex) + v].pos =
-								(world_matrix * [4]f32{val[0], val[1], val[2], 1.0}).xyz
+					if model.meshes[mesh_index].vertices != nil do log.warnf("[%s] Vertices attribute data already loaded", file_path)
+					else {
+						model.meshes[mesh_index].vertices = make([]Vector3, accessor.count)
+						for v in 0 ..< accessor.count {
+							val: Vector3
+							if cgltf.accessor_read_float(accessor, v, &val[0], 3) {
+								model.meshes[mesh_index].vertices[v] = (world_matrix * [4]f32{val[0], val[1], val[2], 1.0}).xyz
+							}
 						}
 					}
 				case .texcoord:
-					for v in 0 ..< vertex_count {
-						val: Vector2
-						if cgltf.accessor_read_float(accessor, v, &val[0], 2) {
-							vertices[uint(base_vertex) + v].uv = val
+					if model.meshes[mesh_index].uvs != nil do log.warnf("[%s] Normals attribute data already loaded", file_path)
+					else {
+						model.meshes[mesh_index].uvs = make([]Vector2, accessor.count)
+						for v in 0 ..< accessor.count {
+							val: Vector2
+							if cgltf.accessor_read_float(accessor, v, &val[0], 2) {
+								model.meshes[mesh_index].uvs[v] = val
+							}
 						}
 					}
 				case .color:
-					for v in 0 ..< vertex_count {
-						val: Vector4
-						if cgltf.accessor_read_float(accessor, v, &val[0], 4) {
-							vertices[uint(base_vertex) + v].color = val
+					if model.meshes[mesh_index].colors != nil do log.warnf("[%s] Colors attribute data already loaded", file_path)
+					else {
+						model.meshes[mesh_index].colors = make([]Vector4, accessor.count)
+						for v in 0 ..< accessor.count {
+							val: Vector4
+							if cgltf.accessor_read_float(accessor, v, &val[0], 4) {
+								model.meshes[mesh_index].colors[v] = val
+							}
 						}
 					}
+				}
+			}
+
+			// If the GLTF doesn't have any information about the vertex colors, we assign WHITE
+			if model.meshes[mesh_index].colors == nil {
+				vertex_count := len(model.meshes[mesh_index].vertices)
+				model.meshes[mesh_index].colors = make([]Vector4, vertex_count)
+
+				for i in 0 ..< vertex_count {
+					model.meshes[mesh_index].colors[i] = {1.0, 1.0, 1.0, 1.0}
 				}
 			}
 
@@ -178,18 +195,19 @@ load_model :: proc(filepath: string) -> (vertices: [dynamic]Vertex, indices: [dy
 			if primitive.indices != nil && primitive.indices.buffer_view != nil {
 				accesor := primitive.indices
 
-				for i in 0 ..< accesor.count {
-					val: u32
-					if cgltf.accessor_read_uint(accesor, i, &val, 1) {
-						append(&indices, val + base_vertex)
+				if model.meshes[mesh_index].indices != nil do log.warnf("[%s] Indices attribute data already loaded", file_path)
+				else {
+					model.meshes[mesh_index].indices = make([]u32, accesor.count)
+					for i in 0 ..< accesor.count {
+						val: u32
+						if cgltf.accessor_read_uint(accesor, i, &val, 1) {
+							model.meshes[mesh_index].indices[i] = val
+						}
 					}
 				}
-			} else {
-				// Fallback: Generate sequential indices if none exist
-				for i in 0 ..< vertex_count {
-					append(&indices, base_vertex + u32(i))
-				}
 			}
+
+			mesh_index += 1
 		}
 	}
 
