@@ -36,7 +36,7 @@ VS_OUTPUT MainVS(VS_INPUT input) {
 
 // Fragment Shader: Outputs the interpolated color
 float4 MainPS(VS_OUTPUT input) : SV_TARGET {
-    float base_color = main_texture.Sample(main_sampler, input.uv);
+    float4 base_color = main_texture.Sample(main_sampler, input.uv);
 
     return base_color * tex_color * input.color;
 }
