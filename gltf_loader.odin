@@ -2,8 +2,11 @@ package graphics
 
 import "core:log"
 import "core:math/linalg"
+import "core:path/filepath"
 import "core:strings"
 import "vendor:cgltf"
+import sdl "vendor:sdl3"
+import sdl_image "vendor:sdl3/image"
 
 Mesh :: struct {
 	vertices: []Vector3,
@@ -12,9 +15,19 @@ Mesh :: struct {
 	indices:  []u32,
 }
 
-Model :: struct {
-	meshes: []Mesh,
+Material :: struct {
+	texture_id: int,
+	color:      Vector4,
 }
+
+Model :: struct {
+	meshes:         []Mesh,
+	materials:      []Material,
+	mesh_materials: []int,
+}
+
+loaded_textures: map[int]^sdl.Surface
+loaded_textures_id: map[string]int
 
 gltf_assert :: proc(ok: bool, message: string) {
 	if !ok do log.panicf(message)
@@ -81,24 +94,25 @@ load_model :: proc(file_path: string) -> (model: Model) {
 	data, parse_result := cgltf.parse_file(
 		options,
 		c_file_path,
-	); gltf_assert(parse_result == .success, "Failed to parse glTF file.")
+	); gltf_assert(parse_result == .success, "Framework Error: Failed to parse glTF file.")
 	defer cgltf.free(data)
 
 	log.debugf("Meshes count: %i", len(data.meshes))
 	log.debugf("Buffers count: %i", len(data.buffers))
 	log.debugf("Images count: %i", len(data.images))
 	log.debugf("Textures count: %i", len(data.textures))
+	log.debugf("Materials count: %i", len(data.materials))
 
 	// 2. Load the binary data (.bin) into memory
 	buffer_result := cgltf.load_buffers(
 		options,
 		data,
 		c_file_path,
-	); gltf_assert(buffer_result == .success, "Failed to load glTF buffers.")
+	); gltf_assert(buffer_result == .success, "Framework Error: Failed to load glTF buffers.")
 
 	gltf_assert(
 		len(data.meshes) > 0 && len(data.meshes[0].primitives) > 0,
-		"No meshes found in glTF file.",
+		"Framework Error: No meshes found in glTF file.",
 	)
 
 	// Determine total number of meshes needed from the node hierarchy
@@ -120,6 +134,42 @@ load_model :: proc(file_path: string) -> (model: Model) {
 	log.debugf("Primitives (triangles only) count based on hierarchy : %i", primitives_count)
 
 	model.meshes = make([]Mesh, primitives_count)
+
+	material_count := len(data.materials) + 1
+	model.mesh_materials = make([]int, primitives_count)
+	model.materials = make([]Material, material_count)
+	model.materials[0] = load_default_material()
+
+	j := 1
+	for i in 0 ..< len(data.materials) {
+		model.materials[j] = load_default_material()
+
+		if data.materials[i].has_pbr_metallic_roughness {
+			if data.materials[i].pbr_metallic_roughness.base_color_texture.texture != nil {
+				img := data.materials[i].pbr_metallic_roughness.base_color_texture.texture.image_
+
+				if img.uri != nil {
+					uri_str := string(img.uri)
+					base_dir := filepath.dir(file_path)
+					full_path, err := filepath.join({base_dir, uri_str}, context.temp_allocator)
+
+					c_path := strings.clone_to_cstring(full_path, context.temp_allocator)
+					texture_image := sdl_image.Load(c_path)
+
+					texture_id := load_texture(full_path)
+					model.materials[j].texture_id = texture_id
+				} else if img.buffer_view != nil {
+					model.materials[j].texture_id = load_texture_raw_data(
+						img.name,
+						img.buffer_view,
+					)
+				}
+			}
+		}
+		model.materials[j].color = data.materials[i].pbr_metallic_roughness.base_color_factor
+
+		j += 1
+	}
 
 	mesh_index: int
 	for i in 0 ..< len(data.nodes) {
@@ -207,6 +257,13 @@ load_model :: proc(file_path: string) -> (model: Model) {
 				}
 			}
 
+			for m in 0 ..< len(data.materials) {
+				if &data.materials[m] == primitive.material {
+					model.mesh_materials[mesh_index] = m + 1
+					break
+				}
+			}
+
 			mesh_index += 1
 		}
 	}
@@ -214,4 +271,84 @@ load_model :: proc(file_path: string) -> (model: Model) {
 	free_all(context.temp_allocator)
 
 	return
+}
+
+load_model_with_texture :: proc(file_path: string, texture_path: string) -> (model: Model) {
+	model = load_model(file_path)
+
+	texture_id := load_texture(texture_path)
+
+	// Insert texture to the model
+	for i in 0 ..< len(model.meshes) {
+		material_index := model.mesh_materials[i]
+		model.materials[material_index].texture_id = texture_id
+	}
+
+	free_all(context.temp_allocator)
+
+	return
+}
+
+load_default_material :: proc() -> Material {
+	return Material{texture_id = 0, color = WHITE}
+}
+
+load_default_textures :: proc() {
+	// For now just load one thing, but we might need to iterate
+	// over all the textures in the directory
+	load_texture("./assets/defaults/white_default.png")
+}
+
+load_texture :: proc(texture_path: string) -> int {
+
+	if t_id, t_ok := loaded_textures_id[texture_path]; t_ok {
+		return t_id
+	}
+
+	c_texture_path := strings.clone_to_cstring(texture_path, context.temp_allocator)
+
+	texture_image := sdl_image.Load(c_texture_path)
+
+	if texture_image == nil {
+		log.warnf("SDL Warning: %s", sdl.GetError())
+		return 0
+	}
+
+	texture_id := len(loaded_textures)
+	loaded_textures[texture_id] = texture_image
+	loaded_textures_id[texture_path] = texture_id
+
+	free_all(context.temp_allocator)
+
+	return texture_id
+}
+
+load_texture_raw_data :: proc(name: cstring, buffer_view: ^cgltf.buffer_view) -> int {
+	name_string := strings.clone_from_cstring(name, context.temp_allocator)
+
+	if t, t_ok := loaded_textures_id[name_string]; t_ok {
+		return t
+	}
+
+	data_ptr := cast([^]u8)buffer_view.buffer.data
+	start := buffer_view.offset
+
+	stream := sdl.IOFromConstMem(&data_ptr[start], uint(buffer_view.size))
+
+	texture_id := len(loaded_textures)
+	loaded_textures[texture_id] = sdl_image.Load_IO(stream, true)
+	loaded_textures_id[name_string] = texture_id
+
+	free_all(context.temp_allocator)
+
+	return texture_id
+}
+
+get_texture :: proc(id: int) -> ^sdl.Surface {
+	if t, t_ok := loaded_textures[id]; t_ok {
+		return t
+	}
+
+	log.warnf("Framework Warning: Texture not found. Returning default texture")
+	return loaded_textures[0]
 }

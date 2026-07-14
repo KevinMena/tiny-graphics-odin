@@ -6,7 +6,6 @@ import "core:mem"
 import "core:strings"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
-import sdl_image "vendor:sdl3/image"
 
 shader_code := #load("assets/shaders/basic.hlsl", string)
 
@@ -112,21 +111,8 @@ main :: proc() {
 	sdl_assert(frag_shader != nil)
 	defer sdl.ReleaseGPUShader(device, frag_shader)
 
-	// Texture
-	texture_image := sdl_image.Load("./assets/colormap.png"); sdl_assert(texture_image != nil)
-	tex_image_size := u32(texture_image.w * texture_image.h * 4)
-	texture := sdl.CreateGPUTexture(
-		device,
-		{
-			format = .R8G8B8A8_UNORM,
-			usage = {.SAMPLER},
-			width = u32(texture_image.w),
-			height = u32(texture_image.h),
-			layer_count_or_depth = 1,
-			num_levels = 1,
-		},
-	)
-	defer sdl.ReleaseGPUTexture(device, texture)
+	// Load default textures
+	load_default_textures()
 
 	depth_tex_props := sdl.CreateProperties()
 	defer sdl.DestroyProperties(depth_tex_props)
@@ -151,16 +137,35 @@ main :: proc() {
 	// Generate triangle vertex data
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
-	model := load_model("./assets/animal-elephant.glb")
+	// model := load_model("./assets/animal-elephant.glb")
+	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
+	// model := load_model("./assets/Mannequin_F.glb")
 
 	// 3. Create data buffers buffer
 	gpu_position_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
 	gpu_uvs_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
 	gpu_colors_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
 	gpu_index_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
+	gpu_textures := make([]^sdl.GPUTexture, len(model.meshes))
 
 	for i in 0 ..< len(model.meshes) {
 		mesh := model.meshes[i]
+
+		texture_id := model.materials[model.mesh_materials[i]].texture_id
+		texture_image := get_texture(texture_id)
+		tex_image_size := u32(texture_image.w * texture_image.h * 4)
+
+		gpu_texture := sdl.CreateGPUTexture(
+			device,
+			{
+				format = .R8G8B8A8_UNORM,
+				usage = {.SAMPLER},
+				width = u32(texture_image.w),
+				height = u32(texture_image.h),
+				layer_count_or_depth = 1,
+				num_levels = 1,
+			},
+		)
 
 		position_size := u32(len(mesh.vertices) * size_of(Vector3))
 		uvs_size := u32(len(mesh.uvs) * size_of(Vector2))
@@ -240,7 +245,7 @@ main :: proc() {
 		sdl.UploadToGPUTexture(
 			copy_pass,
 			{transfer_buffer = tex_transfer_buffer},
-			{texture = texture, w = u32(texture_image.w), h = u32(texture_image.h), d = 1},
+			{texture = gpu_texture, w = u32(texture_image.w), h = u32(texture_image.h), d = 1},
 			false,
 		)
 
@@ -257,6 +262,7 @@ main :: proc() {
 		gpu_uvs_buffers[i] = uv_buffer
 		gpu_colors_buffers[i] = color_buffer
 		gpu_index_buffers[i] = index_buffer
+		gpu_textures[i] = gpu_texture
 	}
 
 	// Texture sampler
@@ -405,7 +411,7 @@ main :: proc() {
 				sdl.BindGPUFragmentSamplers(
 					render_pass,
 					0,
-					&(sdl.GPUTextureSamplerBinding{texture = texture, sampler = sampler}),
+					&(sdl.GPUTextureSamplerBinding{texture = gpu_textures[i], sampler = sampler}),
 					1,
 				)
 
@@ -437,12 +443,14 @@ main :: proc() {
 		sdl.ReleaseGPUBuffer(device, gpu_uvs_buffers[i])
 		sdl.ReleaseGPUBuffer(device, gpu_colors_buffers[i])
 		sdl.ReleaseGPUBuffer(device, gpu_index_buffers[i])
+		sdl.ReleaseGPUTexture(device, gpu_textures[i])
 	}
 
 	delete(gpu_position_buffers)
 	delete(gpu_uvs_buffers)
 	delete(gpu_colors_buffers)
 	delete(gpu_index_buffers)
+	delete(gpu_textures)
 
 	// delete(model)
 	free_all(context.temp_allocator)
