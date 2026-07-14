@@ -9,8 +9,12 @@ import sdl "vendor:sdl3"
 
 shader_code := #load("assets/shaders/basic.hlsl", string)
 
-UniformBufferObject :: struct {
+VertexUniform :: struct {
 	mvp: matrix[4, 4]f32,
+}
+
+FragmentUniform :: struct {
+	color: Vector4,
 }
 
 Vector2 :: [2]f32
@@ -138,8 +142,8 @@ main :: proc() {
 	// 1. Describe vertex attributes and vertex buffers in the pipeline
 	// 2. Create vertex data
 	// model := load_model("./assets/animal-elephant.glb")
-	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
-	// model := load_model("./assets/Mannequin_F.glb")
+	// model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
+	model := load_model("./assets/Mannequin_F.glb")
 
 	// 3. Create data buffers buffer
 	gpu_position_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
@@ -369,7 +373,7 @@ main :: proc() {
 			linalg.matrix4_translate_f32({0, -1, -3}) *
 			linalg.matrix4_rotate_f32(rotation, {0, 1, 0})
 
-		ubo := UniformBufferObject {
+		ubo := VertexUniform {
 			mvp = proj_mat * model_mat,
 		}
 
@@ -396,6 +400,12 @@ main :: proc() {
 			sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
 
 			for i in 0 ..< len(model.meshes) {
+				// Fragment uniform data
+				material_id := model.mesh_materials[i]
+				ufd := FragmentUniform {
+					color = model.materials[material_id].color,
+				}
+
 				// Bind vertex data
 				bindings := []sdl.GPUBufferBinding {
 					{buffer = gpu_position_buffers[i], offset = 0}, // Slot 0
@@ -408,6 +418,7 @@ main :: proc() {
 
 				// Bind uniform data
 				sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
+				sdl.PushGPUFragmentUniformData(cmd_buffer, 0, &ufd, size_of(ufd))
 				sdl.BindGPUFragmentSamplers(
 					render_pass,
 					0,

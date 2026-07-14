@@ -1,5 +1,9 @@
-cbuffer Uniform : register(b0, space1) {
+cbuffer VertexUniform : register(b0, space1) {
     float4x4 mvp;
+}
+
+cbuffer FragmentUniform : register(b0, space3) {
+    float4 tex_color;
 }
 
 Texture2D    main_texture : register(t0, space2);
@@ -32,7 +36,7 @@ VS_OUTPUT MainVS(VS_INPUT input) {
 
 // Fragment Shader: Outputs the interpolated color
 float4 MainPS(VS_OUTPUT input) : SV_TARGET {
-    float4 tex_color = main_texture.Sample(main_sampler, input.uv);
+    float base_color = main_texture.Sample(main_sampler, input.uv);
 
-    return tex_color * input.color;
+    return base_color * tex_color * input.color;
 }
