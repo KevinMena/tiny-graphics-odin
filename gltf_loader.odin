@@ -8,24 +8,6 @@ import "vendor:cgltf"
 import sdl "vendor:sdl3"
 import sdl_image "vendor:sdl3/image"
 
-Mesh :: struct {
-	vertices: []Vector3,
-	uvs:      []Vector2,
-	colors:   []Vector4,
-	indices:  []u32,
-}
-
-Material :: struct {
-	texture_id: int,
-	color:      Vector4,
-}
-
-Model :: struct {
-	meshes:         []Mesh,
-	materials:      []Material,
-	mesh_materials: []int,
-}
-
 loaded_textures: map[int]^sdl.Surface
 loaded_textures_id: map[string]int
 
@@ -189,6 +171,10 @@ load_model :: proc(file_path: string) -> (model: Model) {
 			// NOTE: Only support primitives defined by triangles
 			if primitive.type != .triangles do continue
 
+			positions: []Vector3
+			uvs: []Vector2
+			colors: []Vector4
+
 			// 3. Extract vertices data
 			for a in 0 ..< len(primitive.attributes) {
 				attribute := primitive.attributes[a]
@@ -196,35 +182,35 @@ load_model :: proc(file_path: string) -> (model: Model) {
 
 				#partial switch attribute.type {
 				case .position:
-					if model.meshes[mesh_index].vertices != nil do log.warnf("[%s] Vertices attribute data already loaded", file_path)
+					if positions != nil do log.warnf("[%s] Vertices attribute data already loaded", file_path)
 					else {
-						model.meshes[mesh_index].vertices = make([]Vector3, accessor.count)
+						positions = make([]Vector3, accessor.count)
 						for v in 0 ..< accessor.count {
 							val: Vector3
 							if cgltf.accessor_read_float(accessor, v, &val[0], 3) {
-								model.meshes[mesh_index].vertices[v] = (world_matrix * [4]f32{val[0], val[1], val[2], 1.0}).xyz
+								positions[v] = (world_matrix * [4]f32{val[0], val[1], val[2], 1.0}).xyz
 							}
 						}
 					}
 				case .texcoord:
-					if model.meshes[mesh_index].uvs != nil do log.warnf("[%s] Normals attribute data already loaded", file_path)
+					if uvs != nil do log.warnf("[%s] Uvs attribute data already loaded", file_path)
 					else {
-						model.meshes[mesh_index].uvs = make([]Vector2, accessor.count)
+						uvs = make([]Vector2, accessor.count)
 						for v in 0 ..< accessor.count {
 							val: Vector2
 							if cgltf.accessor_read_float(accessor, v, &val[0], 2) {
-								model.meshes[mesh_index].uvs[v] = val
+								uvs[v] = val
 							}
 						}
 					}
 				case .color:
-					if model.meshes[mesh_index].colors != nil do log.warnf("[%s] Colors attribute data already loaded", file_path)
+					if colors != nil do log.warnf("[%s] Colors attribute data already loaded", file_path)
 					else {
-						model.meshes[mesh_index].colors = make([]Vector4, accessor.count)
+						colors = make([]Vector4, accessor.count)
 						for v in 0 ..< accessor.count {
 							val: Vector4
 							if cgltf.accessor_read_float(accessor, v, &val[0], 4) {
-								model.meshes[mesh_index].colors[v] = val
+								colors[v] = val
 							}
 						}
 					}
@@ -232,12 +218,23 @@ load_model :: proc(file_path: string) -> (model: Model) {
 			}
 
 			// If the GLTF doesn't have any information about the vertex colors, we assign WHITE
-			if model.meshes[mesh_index].colors == nil {
-				vertex_count := len(model.meshes[mesh_index].vertices)
-				model.meshes[mesh_index].colors = make([]Vector4, vertex_count)
+			if colors == nil {
+				vertex_count := len(positions)
+				colors = make([]Vector4, vertex_count)
 
 				for i in 0 ..< vertex_count {
-					model.meshes[mesh_index].colors[i] = {1.0, 1.0, 1.0, 1.0}
+					colors[i] = {1.0, 1.0, 1.0, 1.0}
+				}
+			}
+
+			// Assign vertex data to the mesh
+			model.meshes[mesh_index].vertices = make([]Vertex, len(positions))
+
+			for v in 0 ..< len(positions) {
+				model.meshes[mesh_index].vertices[v] = Vertex {
+					pos   = positions[v],
+					uv    = uvs[v],
+					color = colors[v],
 				}
 			}
 

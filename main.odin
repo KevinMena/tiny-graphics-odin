@@ -2,7 +2,6 @@ package graphics
 
 import "core:log"
 import "core:math/linalg"
-import "core:mem"
 import "core:strings"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
@@ -20,12 +19,6 @@ FragmentUniform :: struct {
 Vector2 :: [2]f32
 Vector3 :: [3]f32
 Vector4 :: [4]f32
-
-Vertex :: struct {
-	pos:   Vector3,
-	color: Vector4,
-	uv:    Vector2,
-}
 
 WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
 
@@ -138,136 +131,13 @@ main :: proc() {
 	)
 	defer sdl.ReleaseGPUTexture(device, depth_texture)
 
-	// Generate triangle vertex data
-	// 1. Describe vertex attributes and vertex buffers in the pipeline
-	// 2. Create vertex data
+	// Load Model
 	// model := load_model("./assets/animal-elephant.glb")
 	// model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
 	model := load_model("./assets/Mannequin_F.glb")
 
-	// 3. Create data buffers buffer
-	gpu_position_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
-	gpu_uvs_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
-	gpu_colors_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
-	gpu_index_buffers := make([]^sdl.GPUBuffer, len(model.meshes))
-	gpu_textures := make([]^sdl.GPUTexture, len(model.meshes))
-
-	for i in 0 ..< len(model.meshes) {
-		mesh := model.meshes[i]
-
-		texture_id := model.materials[model.mesh_materials[i]].texture_id
-		texture_image := get_texture(texture_id)
-		tex_image_size := u32(texture_image.w * texture_image.h * 4)
-
-		gpu_texture := sdl.CreateGPUTexture(
-			device,
-			{
-				format = .R8G8B8A8_UNORM,
-				usage = {.SAMPLER},
-				width = u32(texture_image.w),
-				height = u32(texture_image.h),
-				layer_count_or_depth = 1,
-				num_levels = 1,
-			},
-		)
-
-		position_size := u32(len(mesh.vertices) * size_of(Vector3))
-		uvs_size := u32(len(mesh.uvs) * size_of(Vector2))
-		colors_size := u32(len(mesh.colors) * size_of(Vector4))
-		index_size := u32(len(mesh.indices) * size_of(u32))
-
-		position_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = position_size})
-		uv_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = uvs_size})
-		color_buffer := sdl.CreateGPUBuffer(device, {usage = {.VERTEX}, size = colors_size})
-		index_buffer := sdl.CreateGPUBuffer(device, {usage = {.INDEX}, size = index_size})
-
-		// 4. Upload vertex data to the vertex buffer
-		// 4.1 Create transfer buffer
-		transfer_buffer := sdl.CreateGPUTransferBuffer(
-			device,
-			{usage = .UPLOAD, size = position_size + uvs_size + colors_size + index_size},
-		)
-
-		tex_transfer_buffer := sdl.CreateGPUTransferBuffer(
-			device,
-			{usage = .UPLOAD, size = tex_image_size},
-		)
-
-		// 4.2 Map Transfer buffer mem and copy it to the gpu
-		transfer_mem := transmute([^]byte)sdl.MapGPUTransferBuffer(device, transfer_buffer, false)
-		mem.copy(transfer_mem, raw_data(mesh.vertices), int(position_size))
-		mem.copy(transfer_mem[int(position_size):], raw_data(mesh.uvs), int(uvs_size))
-		mem.copy(
-			transfer_mem[int(position_size) + int(uvs_size):],
-			raw_data(mesh.colors),
-			int(colors_size),
-		)
-		mem.copy(
-			transfer_mem[int(position_size) + int(uvs_size) + int(colors_size):],
-			raw_data(mesh.indices),
-			int(index_size),
-		)
-		sdl.UnmapGPUTransferBuffer(device, transfer_buffer)
-
-		tex_transfer_mem := sdl.MapGPUTransferBuffer(device, tex_transfer_buffer, false)
-		mem.copy(tex_transfer_mem, texture_image.pixels, int(tex_image_size))
-		sdl.UnmapGPUTransferBuffer(device, tex_transfer_buffer)
-
-		// 4.3 Begin Copy pass
-		copy_cmd_buffer := sdl.AcquireGPUCommandBuffer(device)
-		copy_pass := sdl.BeginGPUCopyPass(copy_cmd_buffer)
-
-		// 4.4 Invoke upload commands
-		sdl.UploadToGPUBuffer(
-			copy_pass,
-			{transfer_buffer = transfer_buffer, offset = 0},
-			{buffer = position_buffer, size = position_size, offset = 0},
-			false,
-		)
-
-		sdl.UploadToGPUBuffer(
-			copy_pass,
-			{transfer_buffer = transfer_buffer, offset = position_size},
-			{buffer = uv_buffer, size = uvs_size, offset = 0},
-			false,
-		)
-
-		sdl.UploadToGPUBuffer(
-			copy_pass,
-			{transfer_buffer = transfer_buffer, offset = position_size + uvs_size},
-			{buffer = color_buffer, size = colors_size, offset = 0},
-			false,
-		)
-
-		sdl.UploadToGPUBuffer(
-			copy_pass,
-			{transfer_buffer = transfer_buffer, offset = position_size + uvs_size + colors_size},
-			{buffer = index_buffer, size = index_size, offset = 0},
-			false,
-		)
-
-		sdl.UploadToGPUTexture(
-			copy_pass,
-			{transfer_buffer = tex_transfer_buffer},
-			{texture = gpu_texture, w = u32(texture_image.w), h = u32(texture_image.h), d = 1},
-			false,
-		)
-
-		// 4.5 End copy pass and submit to gpu
-		sdl.EndGPUCopyPass(copy_pass)
-		ok = sdl.SubmitGPUCommandBuffer(copy_cmd_buffer); sdl_assert(ok)
-
-		//4.6 Release transfer buffer
-		sdl.ReleaseGPUTransferBuffer(device, transfer_buffer)
-		sdl.ReleaseGPUTransferBuffer(device, tex_transfer_buffer)
-
-		// Append to array of buffers
-		gpu_position_buffers[i] = position_buffer
-		gpu_uvs_buffers[i] = uv_buffer
-		gpu_colors_buffers[i] = color_buffer
-		gpu_index_buffers[i] = index_buffer
-		gpu_textures[i] = gpu_texture
-	}
+	gpu_model := upload_model(&model, device)
+	defer free_gpu_model(&gpu_model, device)
 
 	// Texture sampler
 	sampler := sdl.CreateGPUSampler(device, {})
@@ -278,26 +148,20 @@ main :: proc() {
 			location    = 0, // Matches TEXCOORD0 (pos)
 			buffer_slot = 0,
 			format      = .FLOAT3,
-			offset      = 0,
+			offset      = u32(offset_of(Vertex, pos)),
 		},
 		{
 			location    = 1, // Matches TEXCOORD1 (uv)
-			buffer_slot = 1,
+			buffer_slot = 0,
 			format      = .FLOAT2,
-			offset      = 0,
+			offset      = u32(offset_of(Vertex, uv)),
 		},
 		{
 			location    = 2, // Matches TEXCOORD2 (color)
-			buffer_slot = 2,
+			buffer_slot = 0,
 			format      = .FLOAT4,
-			offset      = 0,
+			offset      = u32(offset_of(Vertex, color)),
 		},
-	}
-
-	vertex_buffer_desc := []sdl.GPUVertexBufferDescription {
-		{slot = 0, pitch = size_of(Vector3)},
-		{slot = 1, pitch = size_of(Vector2)},
-		{slot = 2, pitch = size_of(Vector4)},
 	}
 
 	pipeline_info := sdl.GPUGraphicsPipelineCreateInfo {
@@ -305,8 +169,11 @@ main :: proc() {
 		fragment_shader = frag_shader,
 		primitive_type = .TRIANGLELIST,
 		vertex_input_state = {
-			num_vertex_buffers = 3,
-			vertex_buffer_descriptions = raw_data(vertex_buffer_desc),
+			num_vertex_buffers = 1,
+			vertex_buffer_descriptions = &(sdl.GPUVertexBufferDescription {
+					slot = 0,
+					pitch = size_of(Vertex),
+				}),
 			num_vertex_attributes = u32(len(vertex_attributes)),
 			vertex_attributes = raw_data(vertex_attributes),
 		},
@@ -399,22 +266,23 @@ main :: proc() {
 			// Bind graphics pipeline
 			sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
 
+			// Bind vertex data
+			sdl.BindGPUVertexBuffers(
+				render_pass,
+				0,
+				&(sdl.GPUBufferBinding{buffer = gpu_model.vertex_buffer}),
+				1,
+			)
+			sdl.BindGPUIndexBuffer(render_pass, {buffer = gpu_model.index_buffer}, ._32BIT)
+
 			for i in 0 ..< len(model.meshes) {
+				gpu_mesh := gpu_model.meshes[i]
+
 				// Fragment uniform data
 				material_id := model.mesh_materials[i]
 				ufd := FragmentUniform {
 					color = model.materials[material_id].color,
 				}
-
-				// Bind vertex data
-				bindings := []sdl.GPUBufferBinding {
-					{buffer = gpu_position_buffers[i], offset = 0}, // Slot 0
-					{buffer = gpu_uvs_buffers[i], offset = 0}, // Slot 1
-					{buffer = gpu_colors_buffers[i], offset = 0}, // Slot 2
-				}
-				sdl.BindGPUVertexBuffers(render_pass, 0, raw_data(bindings), 3)
-
-				sdl.BindGPUIndexBuffer(render_pass, {buffer = gpu_index_buffers[i]}, ._32BIT)
 
 				// Bind uniform data
 				sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
@@ -422,17 +290,17 @@ main :: proc() {
 				sdl.BindGPUFragmentSamplers(
 					render_pass,
 					0,
-					&(sdl.GPUTextureSamplerBinding{texture = gpu_textures[i], sampler = sampler}),
+					&(sdl.GPUTextureSamplerBinding{texture = gpu_mesh.texture, sampler = sampler}),
 					1,
 				)
 
 				// Draw calls
 				sdl.DrawGPUIndexedPrimitives(
 					render_pass,
-					u32(len(model.meshes[i].indices)),
+					gpu_mesh.index_count,
 					1,
-					0,
-					0,
+					gpu_mesh.first_index,
+					gpu_mesh.vertex_offset,
 					0,
 				)
 			}
@@ -449,20 +317,5 @@ main :: proc() {
 		}
 	}
 
-	for i in 0 ..< len(model.meshes) {
-		sdl.ReleaseGPUBuffer(device, gpu_position_buffers[i])
-		sdl.ReleaseGPUBuffer(device, gpu_uvs_buffers[i])
-		sdl.ReleaseGPUBuffer(device, gpu_colors_buffers[i])
-		sdl.ReleaseGPUBuffer(device, gpu_index_buffers[i])
-		sdl.ReleaseGPUTexture(device, gpu_textures[i])
-	}
-
-	delete(gpu_position_buffers)
-	delete(gpu_uvs_buffers)
-	delete(gpu_colors_buffers)
-	delete(gpu_index_buffers)
-	delete(gpu_textures)
-
-	// delete(model)
 	free_all(context.temp_allocator)
 }
