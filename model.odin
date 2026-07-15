@@ -25,27 +25,32 @@ Model :: struct {
 	mesh_materials: []int,
 }
 
+GPUTextureData :: struct {
+	texture: ^sdl.GPUTexture,
+	w:       u32,
+	h:       u32,
+}
+
 GPUMesh :: struct {
 	index_count:   u32,
 	first_index:   u32,
 	vertex_offset: i32,
-	texture:       ^sdl.GPUTexture,
-	w:             u32,
-	h:             u32,
+	texture_idx:   int,
 }
 
 GPUModel :: struct {
 	vertex_buffer: ^sdl.GPUBuffer,
 	index_buffer:  ^sdl.GPUBuffer,
 	meshes:        []GPUMesh,
+	textures_data: []GPUTextureData,
 }
 
 free_gpu_model :: proc(gpu_model: ^GPUModel, device: ^sdl.GPUDevice) {
 	sdl.ReleaseGPUBuffer(device, gpu_model.vertex_buffer)
 	sdl.ReleaseGPUBuffer(device, gpu_model.index_buffer)
 
-	for mesh in gpu_model.meshes {
-		sdl.ReleaseGPUTexture(device, mesh.texture)
+	for data in gpu_model.textures_data {
+		sdl.ReleaseGPUTexture(device, data.texture)
 	}
 }
 
@@ -88,7 +93,13 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 	current_index_offset: u32 = 0
 
 	// We need to track texture transfer buffers so we can release them AT THE END
-	tex_transfers := make([dynamic]^sdl.GPUTransferBuffer, context.temp_allocator)
+	tex_transfers := make([dynamic]^sdl.GPUTransferBuffer)
+
+	created_textures := make(map[int]^sdl.GPUTexture)
+	defer delete(created_textures)
+	unique_textures := make([dynamic]GPUTextureData)
+	defer delete(unique_textures)
+	texture_len := -1
 
 	// 4.2 Map Transfer buffer mem and copy it to the gpu
 	for i in 0 ..< len(model.meshes) {
@@ -117,17 +128,33 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 		texture_image := get_texture(texture_id)
 		tex_size := u32(texture_image.w * texture_image.h * 4)
 
-		gpu_texture := sdl.CreateGPUTexture(
-			device,
-			{
-				format = .R8G8B8A8_UNORM,
-				usage = {.SAMPLER},
-				width = u32(texture_image.w),
-				height = u32(texture_image.h),
-				layer_count_or_depth = 1,
-				num_levels = 1,
-			},
-		)
+		gpu_texture: ^sdl.GPUTexture
+		if existing_tex, created := created_textures[texture_id]; created {
+			gpu_texture = existing_tex
+		} else {
+			gpu_texture = sdl.CreateGPUTexture(
+				device,
+				{
+					format = .R8G8B8A8_UNORM,
+					usage = {.SAMPLER},
+					width = u32(texture_image.w),
+					height = u32(texture_image.h),
+					layer_count_or_depth = 1,
+					num_levels = 1,
+				},
+			)
+
+			created_textures[texture_id] = gpu_texture
+			append(
+				&unique_textures,
+				GPUTextureData {
+					texture = gpu_texture,
+					w = u32(texture_image.w),
+					h = u32(texture_image.h),
+				},
+			)
+			texture_len += 1
+		}
 
 		tex_transfer_buffer := sdl.CreateGPUTransferBuffer(
 			device,
@@ -143,14 +170,16 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 			index_count   = index_count,
 			first_index   = current_index_offset,
 			vertex_offset = i32(current_vertex_offset),
-			texture       = gpu_texture,
-			w             = u32(texture_image.w),
-			h             = u32(texture_image.h),
+			texture_idx   = texture_len,
 		}
 
 		current_vertex_offset += vertex_count
 		current_index_offset += index_count
 	}
+
+	// Need to put the unique textures into the model
+	gpu_model.textures_data = make([]GPUTextureData, len(unique_textures))
+	copy(gpu_model.textures_data, unique_textures[:])
 
 	// 4.3 Begin Copy pass
 	copy_cmd_buffer := sdl.AcquireGPUCommandBuffer(device)
@@ -171,13 +200,13 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 		false,
 	)
 
-	for i in 0 ..< len(gpu_model.meshes) {
-		gpu_mesh := gpu_model.meshes[i]
+	for i in 0 ..< len(gpu_model.textures_data) {
+		data := gpu_model.textures_data[i]
 
 		sdl.UploadToGPUTexture(
 			copy_pass,
 			{transfer_buffer = tex_transfers[i]},
-			{texture = gpu_mesh.texture, w = gpu_mesh.w, h = gpu_mesh.h, d = 1},
+			{texture = data.texture, w = data.w, h = data.h, d = 1},
 			false,
 		)
 	}

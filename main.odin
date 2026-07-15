@@ -133,8 +133,8 @@ main :: proc() {
 
 	// Load Model
 	// model := load_model("./assets/animal-elephant.glb")
-	// model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
-	model := load_model("./assets/Mannequin_F.glb")
+	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
+	// model := load_model("./assets/Mannequin_F.glb")
 
 	gpu_model := upload_model(&model, device)
 	defer free_gpu_model(&gpu_model, device)
@@ -290,7 +290,10 @@ main :: proc() {
 				sdl.BindGPUFragmentSamplers(
 					render_pass,
 					0,
-					&(sdl.GPUTextureSamplerBinding{texture = gpu_mesh.texture, sampler = sampler}),
+					&(sdl.GPUTextureSamplerBinding {
+							texture = gpu_model.textures_data[gpu_mesh.texture_idx].texture,
+							sampler = sampler,
+						}),
 					1,
 				)
 
