@@ -27,8 +27,7 @@ Model :: struct {
 
 GPUTextureData :: struct {
 	texture: ^sdl.GPUTexture,
-	w:       u32,
-	h:       u32,
+	surface: ^sdl.Surface,
 }
 
 GPUMesh :: struct {
@@ -126,7 +125,6 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 		// Texture
 		texture_id := model.materials[model.mesh_materials[i]].texture_id
 		texture_image := get_texture(texture_id)
-		tex_size := u32(texture_image.w * texture_image.h * 4)
 
 		gpu_texture: ^sdl.GPUTexture
 		if existing_tex, created := created_textures[texture_id]; created {
@@ -147,24 +145,10 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 			created_textures[texture_id] = gpu_texture
 			append(
 				&unique_textures,
-				GPUTextureData {
-					texture = gpu_texture,
-					w = u32(texture_image.w),
-					h = u32(texture_image.h),
-				},
+				GPUTextureData{texture = gpu_texture, surface = texture_image},
 			)
 			texture_len += 1
 		}
-
-		tex_transfer_buffer := sdl.CreateGPUTransferBuffer(
-			device,
-			{usage = .UPLOAD, size = tex_size},
-		)
-		append(&tex_transfers, tex_transfer_buffer)
-
-		tex_transfer_mem := sdl.MapGPUTransferBuffer(device, tex_transfer_buffer, false)
-		mem.copy(tex_transfer_mem, texture_image.pixels, int(tex_size))
-		sdl.UnmapGPUTransferBuffer(device, tex_transfer_buffer)
 
 		gpu_model.meshes[i] = GPUMesh {
 			index_count   = index_count,
@@ -180,6 +164,21 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 	// Need to put the unique textures into the model
 	gpu_model.textures_data = make([]GPUTextureData, len(unique_textures))
 	copy(gpu_model.textures_data, unique_textures[:])
+
+	for data in gpu_model.textures_data {
+		texture_image := data.surface
+		tex_size := u32(texture_image.w * texture_image.h * 4)
+
+		tex_transfer_buffer := sdl.CreateGPUTransferBuffer(
+			device,
+			{usage = .UPLOAD, size = tex_size},
+		)
+		append(&tex_transfers, tex_transfer_buffer)
+
+		tex_transfer_mem := sdl.MapGPUTransferBuffer(device, tex_transfer_buffer, false)
+		mem.copy(tex_transfer_mem, texture_image.pixels, int(tex_size))
+		sdl.UnmapGPUTransferBuffer(device, tex_transfer_buffer)
+	}
 
 	// 4.3 Begin Copy pass
 	copy_cmd_buffer := sdl.AcquireGPUCommandBuffer(device)
@@ -206,7 +205,7 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 		sdl.UploadToGPUTexture(
 			copy_pass,
 			{transfer_buffer = tex_transfers[i]},
-			{texture = data.texture, w = data.w, h = data.h, d = 1},
+			{texture = data.texture, w = u32(data.surface.w), h = u32(data.surface.h), d = 1},
 			false,
 		)
 	}
