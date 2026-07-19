@@ -1,123 +1,97 @@
 package graphics
 
+import "base:runtime"
 import "core:log"
 import "core:math/linalg"
-import "core:strings"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
 
-shader_code := #load("assets/shaders/basic.hlsl", string)
-
-VertexUniform :: struct {
-	mvp: matrix[4, 4]f32,
-}
-
-FragmentUniform :: struct {
-	color: Vector4,
-}
 
 Vector2 :: [2]f32
 Vector3 :: [3]f32
 Vector4 :: [4]f32
 
+DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D32_FLOAT
 WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
+
+proj_mat: matrix[4, 4]f32
+
+device: ^sdl.GPUDevice
+window: ^sdl.Window
+window_size: [2]i32
+depth_texture: ^sdl.GPUTexture
+
+// TODO: Make these a properties of the materials instead, not a global one
+pipeline: ^sdl.GPUGraphicsPipeline
+sampler: ^sdl.GPUSampler
+
 
 sdl_assert :: proc(ok: bool) {
 	if !ok do log.panicf("SDL Error: %s", sdl.GetError())
 }
 
-compile_shader_stage :: proc(
-	raw_code: string,
-	entrypoint: cstring,
-	stage: shadercross.ShaderStage,
-	device: ^sdl.GPUDevice,
-) -> (
-	shader: ^sdl.GPUShader,
+sdl_log :: proc "c" (
+	userdata: rawptr,
+	category: sdl.LogCategory,
+	priority: sdl.LogPriority,
+	message: cstring,
 ) {
-	prop_id: sdl.PropertiesID
-	vertex_text := strings.clone_to_cstring(raw_code, context.temp_allocator)
-	vertex_info := shadercross.HLSL_Info {
-		source       = vertex_text,
-		entrypoint   = entrypoint,
-		include_dir  = nil,
-		shader_stage = stage,
-		props        = prop_id,
+	context = (transmute(^runtime.Context)userdata)^
+	level: log.Level
+	switch priority {
+	case .INVALID, .TRACE, .VERBOSE, .DEBUG:
+		level = .Debug
+	case .INFO:
+		level = .Info
+	case .WARN:
+		level = .Warning
+	case .ERROR:
+		level = .Error
+	case .CRITICAL:
+		level = .Fatal
 	}
-
-	size: uint
-	spirv_bytecode := shadercross.CompileSPIRVFromHLSL(
-		vertex_info,
-		&size,
-	); sdl_assert(spirv_bytecode != nil)
-	defer sdl.free(rawptr(spirv_bytecode))
-
-	reflect := shadercross.ReflectGraphicsSPIRV(
-		spirv_bytecode,
-		size,
-		prop_id,
-	); sdl_assert(reflect != nil)
-	defer sdl.free(rawptr(reflect))
-
-	shader = shadercross.CompileGraphicsShaderFromSPIRV(
-		device,
-		{
-			bytecode = spirv_bytecode,
-			bytecode_size = size,
-			entrypoint = entrypoint,
-			shader_stage = stage,
-			props = prop_id,
-		},
-		reflect.resource_info,
-		prop_id,
-	)
-
-	return
+	log.logf(level, "SDL {}: {}", category, message)
 }
 
-main :: proc() {
-	context.logger = log.create_console_logger()
+free_sdl :: proc() {
+	shadercross.Quit()
+	sdl.ReleaseGPUTexture(device, depth_texture)
+	sdl.ReleaseWindowFromGPUDevice(device, window)
+	sdl.DestroyWindow(window)
+	sdl.DestroyGPUDevice(device)
+	sdl.Quit()
+}
+
+@(deferred_none = free_sdl)
+init_sdl :: proc() {
+	@(static) sdl_log_context: runtime.Context
+	sdl_log_context = context
+	sdl_log_context.logger.options -= {.Short_File_Path, .Line, .Procedure}
+	sdl.SetLogPriorities(.VERBOSE)
+	sdl.SetLogOutputFunction(sdl_log, &sdl_log_context)
 
 	sdl_ok := sdl.Init({.VIDEO}); sdl_assert(sdl_ok)
-	defer sdl.Quit()
 
 	// TODO: ADD .SPIRV WHEN TRYING TO WOKR WITH VULKAN
 	shader_formats: sdl.GPUShaderFormat = {.DXIL}
-	device := sdl.CreateGPUDevice(shader_formats, true, nil); sdl_assert(device != nil)
-	defer sdl.DestroyGPUDevice(device)
+	device = sdl.CreateGPUDevice(shader_formats, true, nil); sdl_assert(device != nil)
 
 	//Shadercross setup for translating shaders
 	shadercross_ok := shadercross.Init(); sdl_assert(shadercross_ok)
-	defer shadercross.Quit()
 
-	windows_flags: sdl.WindowFlags = {.RESIZABLE, .HIGH_PIXEL_DENSITY}
-	window := sdl.CreateWindow("SDL Test", 1280, 720, windows_flags); sdl_assert(window != nil)
-	defer sdl.DestroyWindow(window)
+	windows_flags: sdl.WindowFlags = {.HIGH_PIXEL_DENSITY}
+	window = sdl.CreateWindow("SDL Test", 1280, 720, windows_flags); sdl_assert(window != nil)
 
 	ok := sdl.ClaimWindowForGPUDevice(device, window); sdl_assert(ok)
-	defer sdl.ReleaseWindowFromGPUDevice(device, window)
 
-	window_size: [2]i32
 	ok = sdl.GetWindowSize(window, &window_size.x, &window_size.y); sdl_assert(ok)
-
-	// Testing shaders
-	vertex_shader := compile_shader_stage(shader_code, cstring("MainVS"), .VERTEX, device)
-	sdl_assert(vertex_shader != nil)
-	defer sdl.ReleaseGPUShader(device, vertex_shader)
-
-	frag_shader := compile_shader_stage(shader_code, cstring("MainPS"), .FRAGMENT, device)
-	sdl_assert(frag_shader != nil)
-	defer sdl.ReleaseGPUShader(device, frag_shader)
-
-	// Load default textures
-	load_default_textures()
 
 	depth_tex_props := sdl.CreateProperties()
 	defer sdl.DestroyProperties(depth_tex_props)
 
 	sdl.SetFloatProperty(depth_tex_props, sdl.PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_DEPTH_FLOAT, 1.0)
 
-	DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D32_FLOAT
-	depth_texture := sdl.CreateGPUTexture(
+	depth_texture = sdl.CreateGPUTexture(
 		device,
 		{
 			format = DEPTH_TEXTURE_FORMAT,
@@ -129,19 +103,22 @@ main :: proc() {
 			props = depth_tex_props,
 		},
 	)
-	defer sdl.ReleaseGPUTexture(device, depth_texture)
+}
 
-	// Load Model
-	// model := load_model("./assets/animal-elephant.glb")
-	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
-	// model := load_model("./assets/Mannequin_F.glb")
+free_pipeline :: proc() {
+	sdl.ReleaseGPUSampler(device, sampler)
+	sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
+}
 
-	gpu_model := upload_model(&model, device)
-	defer free_gpu_model(&gpu_model, device)
+@(deferred_none = free_pipeline)
+setup_pipeline :: proc() {
+	vertex_shader := compile_shader_stage(shader_code, cstring("MainVS"), .VERTEX, device)
+	sdl_assert(vertex_shader != nil)
+	defer sdl.ReleaseGPUShader(device, vertex_shader)
 
-	// Texture sampler
-	sampler := sdl.CreateGPUSampler(device, {})
-	defer sdl.ReleaseGPUSampler(device, sampler)
+	frag_shader := compile_shader_stage(shader_code, cstring("MainPS"), .FRAGMENT, device)
+	sdl_assert(frag_shader != nil)
+	defer sdl.ReleaseGPUShader(device, frag_shader)
 
 	vertex_attributes := []sdl.GPUVertexAttribute {
 		{
@@ -192,11 +169,33 @@ main :: proc() {
 		},
 	}
 
-	pipeline := sdl.CreateGPUGraphicsPipeline(device, pipeline_info); sdl_assert(pipeline != nil)
-	defer sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
+	pipeline = sdl.CreateGPUGraphicsPipeline(device, pipeline_info); sdl_assert(pipeline != nil)
 
-	rotation: f32
-	proj_mat := linalg.matrix4_perspective_f32(
+	// Texture sampler
+	sampler = sdl.CreateGPUSampler(device, {})
+}
+
+main :: proc() {
+	context.logger = log.create_console_logger()
+
+	init_sdl()
+
+	// Load default textures
+	load_default_textures()
+
+	// Load Model
+	// model := load_model("./assets/animal-elephant.glb")
+	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
+	// model := load_model("./assets/Mannequin_F.glb")
+
+	gpu_model := upload_model(&model, device)
+	defer free_gpu_model(&gpu_model, device)
+
+	// Create the graphics pipeline
+	setup_pipeline()
+
+	rotation_angle: f32
+	proj_mat = linalg.matrix4_perspective_f32(
 		linalg.to_radians(f32(60)),
 		f32(window_size.x) / f32(window_size.y),
 		0.01,
@@ -209,6 +208,8 @@ main :: proc() {
 	last_ticks := sdl.GetTicks()
 
 	for running {
+		free_all(context.temp_allocator)
+
 		current_ticks := sdl.GetTicks()
 		delta_time := f32(current_ticks - last_ticks) / 1000
 		last_ticks = current_ticks
@@ -228,21 +229,13 @@ main :: proc() {
 		}
 
 		// Update game
+		rotation_angle += linalg.to_radians(f32(90)) * delta_time
 
 		// Render
 		// 1. Acquire command buffer
 		cmd_buffer := sdl.AcquireGPUCommandBuffer(device)
 		// 2. Acquire swapchain texture
 		swapchain_tex: ^sdl.GPUTexture
-
-		rotation += linalg.to_radians(f32(90)) * delta_time
-		model_mat :=
-			linalg.matrix4_translate_f32({0, -1, -3}) *
-			linalg.matrix4_rotate_f32(rotation, {0, 1, 0})
-
-		ubo := VertexUniform {
-			mvp = proj_mat * model_mat,
-		}
 
 		if sdl.WaitAndAcquireGPUSwapchainTexture(cmd_buffer, window, &swapchain_tex, nil, nil) {
 			// 3. Begin Render pass
@@ -266,47 +259,14 @@ main :: proc() {
 			// Bind graphics pipeline
 			sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
 
-			// Bind vertex data
-			sdl.BindGPUVertexBuffers(
+			draw_model(
+				gpu_model,
 				render_pass,
-				0,
-				&(sdl.GPUBufferBinding{buffer = gpu_model.vertex_buffer}),
-				1,
+				cmd_buffer,
+				sampler,
+				{0, -1, -3},
+				{0, rotation_angle, 0},
 			)
-			sdl.BindGPUIndexBuffer(render_pass, {buffer = gpu_model.index_buffer}, ._32BIT)
-
-			for i in 0 ..< len(model.meshes) {
-				gpu_mesh := gpu_model.meshes[i]
-
-				// Fragment uniform data
-				material_id := model.mesh_materials[i]
-				ufd := FragmentUniform {
-					color = model.materials[material_id].color,
-				}
-
-				// Bind uniform data
-				sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
-				sdl.PushGPUFragmentUniformData(cmd_buffer, 0, &ufd, size_of(ufd))
-				sdl.BindGPUFragmentSamplers(
-					render_pass,
-					0,
-					&(sdl.GPUTextureSamplerBinding {
-							texture = gpu_model.textures_data[gpu_mesh.texture_idx].texture,
-							sampler = sampler,
-						}),
-					1,
-				)
-
-				// Draw calls
-				sdl.DrawGPUIndexedPrimitives(
-					render_pass,
-					gpu_mesh.index_count,
-					1,
-					gpu_mesh.first_index,
-					gpu_mesh.vertex_offset,
-					0,
-				)
-			}
 
 			// 5. End Render pass
 			sdl.EndGPURenderPass(render_pass)
@@ -319,6 +279,4 @@ main :: proc() {
 			log.errorf("Failed to submit the command buffer: %s", sdl.GetError())
 		}
 	}
-
-	free_all(context.temp_allocator)
 }

@@ -1,5 +1,6 @@
 package graphics
 
+import "core:math/linalg"
 import "core:mem"
 import sdl "vendor:sdl3"
 
@@ -35,6 +36,7 @@ GPUMesh :: struct {
 	first_index:   u32,
 	vertex_offset: i32,
 	texture_idx:   int,
+	texture_color: Vector4,
 }
 
 GPUModel :: struct {
@@ -155,6 +157,7 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 			first_index   = current_index_offset,
 			vertex_offset = i32(current_vertex_offset),
 			texture_idx   = texture_len,
+			texture_color = model.materials[model.mesh_materials[i]].color,
 		}
 
 		current_vertex_offset += vertex_count
@@ -222,4 +225,63 @@ upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUMo
 	}
 
 	return
+}
+
+draw_model :: proc(
+	gpu_model: GPUModel,
+	render_pass: ^sdl.GPURenderPass,
+	cmd_buffer: ^sdl.GPUCommandBuffer,
+	sampler: ^sdl.GPUSampler,
+	position: Vector3 = {0, 0, 0},
+	rotation: Vector3 = {0, 0, 0},
+	scale: f32 = 1.0,
+) {
+	// Calculate UBO
+	model_mat :=
+		linalg.matrix4_translate_f32(position) *
+		linalg.matrix4_from_euler_angles_xyz_f32(rotation.x, rotation.y, rotation.z)
+
+	ubo := VertexUniform {
+		mvp = proj_mat * model_mat,
+	}
+	// Bind vertex data
+	sdl.BindGPUVertexBuffers(
+		render_pass,
+		0,
+		&(sdl.GPUBufferBinding{buffer = gpu_model.vertex_buffer}),
+		1,
+	)
+	sdl.BindGPUIndexBuffer(render_pass, {buffer = gpu_model.index_buffer}, ._32BIT)
+
+	for i in 0 ..< len(gpu_model.meshes) {
+		gpu_mesh := gpu_model.meshes[i]
+
+		// Fragment uniform data
+		ufd := FragmentUniform {
+			color = gpu_mesh.texture_color,
+		}
+
+		// Bind uniform data
+		sdl.PushGPUVertexUniformData(cmd_buffer, 0, &ubo, size_of(ubo))
+		sdl.PushGPUFragmentUniformData(cmd_buffer, 0, &ufd, size_of(ufd))
+		sdl.BindGPUFragmentSamplers(
+			render_pass,
+			0,
+			&(sdl.GPUTextureSamplerBinding {
+					texture = gpu_model.textures_data[gpu_mesh.texture_idx].texture,
+					sampler = sampler,
+				}),
+			1,
+		)
+
+		// Draw calls
+		sdl.DrawGPUIndexedPrimitives(
+			render_pass,
+			gpu_mesh.index_count,
+			1,
+			gpu_mesh.first_index,
+			gpu_mesh.vertex_offset,
+			0,
+		)
+	}
 }
