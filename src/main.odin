@@ -22,7 +22,6 @@ Vector2 :: [2]f32
 Vector3 :: [3]f32
 Vector4 :: [4]f32
 
-DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D32_FLOAT
 WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
 
 CAMERA_MOVE_SPEED :: 5
@@ -38,6 +37,7 @@ device: ^sdl.GPUDevice
 window: ^sdl.Window
 window_size: [2]i32
 depth_texture: ^sdl.GPUTexture
+depth_texture_format: sdl.GPUTextureFormat
 
 // TODO: Make these a properties of the materials instead, not a global one
 pipeline: ^sdl.GPUGraphicsPipeline
@@ -108,10 +108,11 @@ init_sdl :: proc() {
 
 	sdl.SetFloatProperty(depth_tex_props, sdl.PROP_GPU_TEXTURE_CREATE_D3D12_CLEAR_DEPTH_FLOAT, 1.0)
 
+	depth_texture_format = get_depth_format()
 	depth_texture = sdl.CreateGPUTexture(
 		device,
 		{
-			format = DEPTH_TEXTURE_FORMAT,
+			format = depth_texture_format,
 			usage = {.DEPTH_STENCIL_TARGET},
 			width = u32(window_size.x),
 			height = u32(window_size.y),
@@ -122,6 +123,18 @@ init_sdl :: proc() {
 	)
 
 	_ = sdl.SetWindowRelativeMouseMode(window, true)
+}
+
+get_depth_format :: proc() -> sdl.GPUTextureFormat {
+	formats := [3]sdl.GPUTextureFormat{.D16_UNORM, .D24_UNORM, .D32_FLOAT}
+
+	for format in formats {
+		if sdl.GPUTextureSupportsFormat(device, format, .D2, {.DEPTH_STENCIL_TARGET}) {
+			return format
+		}
+	}
+
+	return .INVALID
 }
 
 free_pipeline :: proc() {
@@ -185,7 +198,7 @@ setup_pipeline :: proc() {
 				format = sdl.GetGPUSwapchainTextureFormat(device, window),
 			},
 			has_depth_stencil_target = true,
-			depth_stencil_format = DEPTH_TEXTURE_FORMAT,
+			depth_stencil_format = depth_texture_format,
 		},
 	}
 
