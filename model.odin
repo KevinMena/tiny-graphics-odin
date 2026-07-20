@@ -242,8 +242,9 @@ draw_model :: proc(
 		linalg.matrix4_from_euler_angles_xyz_f32(rotation.x, rotation.y, rotation.z)
 
 	ubo := VertexUniform {
-		mvp = proj_mat * model_mat,
+		mvp = proj_mat * view_mat * model_mat,
 	}
+
 	// Bind vertex data
 	sdl.BindGPUVertexBuffers(
 		render_pass,

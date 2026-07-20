@@ -2,10 +2,21 @@ package graphics
 
 import "base:runtime"
 import "core:log"
+import "core:math"
 import "core:math/linalg"
 import "libs/shadercross"
 import sdl "vendor:sdl3"
 
+Camera :: struct {
+	position: Vector3,
+	target:   Vector3,
+}
+
+Look :: struct {
+	yaw:   f32,
+	pitch: f32,
+	roll:  f32,
+}
 
 Vector2 :: [2]f32
 Vector3 :: [3]f32
@@ -14,7 +25,14 @@ Vector4 :: [4]f32
 DEPTH_TEXTURE_FORMAT :: sdl.GPUTextureFormat.D32_FLOAT
 WHITE :: [4]f32{1.0, 1.0, 1.0, 1.0}
 
+CAMERA_MOVE_SPEED :: 5
+MOUSE_SENSITIVITY :: 0.1
+
+key_down: [^]bool
+mouse_delta: Vector2
+
 proj_mat: matrix[4, 4]f32
+view_mat: matrix[4, 4]f32
 
 device: ^sdl.GPUDevice
 window: ^sdl.Window
@@ -24,7 +42,6 @@ depth_texture: ^sdl.GPUTexture
 // TODO: Make these a properties of the materials instead, not a global one
 pipeline: ^sdl.GPUGraphicsPipeline
 sampler: ^sdl.GPUSampler
-
 
 sdl_assert :: proc(ok: bool) {
 	if !ok do log.panicf("SDL Error: %s", sdl.GetError())
@@ -103,6 +120,8 @@ init_sdl :: proc() {
 			props = depth_tex_props,
 		},
 	)
+
+	_ = sdl.SetWindowRelativeMouseMode(window, true)
 }
 
 free_pipeline :: proc() {
@@ -159,6 +178,7 @@ setup_pipeline :: proc() {
 			enable_depth_write = true,
 			compare_op = .LESS,
 		},
+		rasterizer_state = {cull_mode = .BACK},
 		target_info = sdl.GPUGraphicsPipelineTargetInfo {
 			num_color_targets = 1,
 			color_target_descriptions = &sdl.GPUColorTargetDescription {
@@ -175,6 +195,37 @@ setup_pipeline :: proc() {
 	sampler = sdl.CreateGPUSampler(device, {})
 }
 
+update_camera :: proc(camera: ^Camera, look: ^Look, dt: f32) {
+	move_input: Vector2
+	if key_down[sdl.Scancode.W] do move_input.y = 1
+	else if key_down[sdl.Scancode.S] do move_input.y = -1
+	if key_down[sdl.Scancode.A] do move_input.x = -1
+	else if key_down[sdl.Scancode.D] do move_input.x = 1
+
+	// Camera look at
+	look_input := mouse_delta * MOUSE_SENSITIVITY
+
+	look.yaw = math.wrap(look.yaw - look_input.x, 360)
+	look.pitch = math.clamp(look.pitch - look_input.y, -89, 89)
+	look.roll = 0
+
+	look_mat := linalg.matrix3_from_yaw_pitch_roll_f32(
+		linalg.to_radians(look.yaw),
+		linalg.to_radians(look.pitch),
+		look.roll,
+	)
+
+	forward := look_mat * Vector3{0, 0, -1}
+	right := look_mat * Vector3{1, 0, 0}
+	move_dir := forward * move_input.y + right * move_input.x
+	move_dir.y = 0
+
+	delta := linalg.normalize0(move_dir) * CAMERA_MOVE_SPEED * dt
+
+	camera.position += delta
+	camera.target = camera.position + forward
+}
+
 main :: proc() {
 	context.logger = log.create_console_logger()
 
@@ -184,8 +235,8 @@ main :: proc() {
 	load_default_textures()
 
 	// Load Model
-	// model := load_model("./assets/animal-elephant.glb")
-	model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
+	model := load_model("./assets/animal-elephant.glb")
+	// model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
 	// model := load_model("./assets/Mannequin_F.glb")
 
 	gpu_model := upload_model(&model, device)
@@ -202,13 +253,22 @@ main :: proc() {
 		1000,
 	)
 
+	camera := Camera {
+		position = {0, 1, 3},
+		target   = {0, 1, 0},
+	}
+
+	look: Look
+
 	running := true
 	event: sdl.Event
 
+	key_down = sdl.GetKeyboardState(nil)
 	last_ticks := sdl.GetTicks()
 
 	for running {
 		free_all(context.temp_allocator)
+		mouse_delta = {}
 
 		current_ticks := sdl.GetTicks()
 		delta_time := f32(current_ticks - last_ticks) / 1000
@@ -228,7 +288,10 @@ main :: proc() {
 			}
 		}
 
+		_ = sdl.GetRelativeMouseState(&mouse_delta.x, &mouse_delta.y)
+
 		// Update game
+		update_camera(&camera, &look, delta_time)
 		rotation_angle += linalg.to_radians(f32(90)) * delta_time
 
 		// Render
@@ -256,6 +319,8 @@ main :: proc() {
 			render_pass := sdl.BeginGPURenderPass(cmd_buffer, &color_target, 1, &depth_target_info)
 
 			// 4. Draw something
+			view_mat = linalg.matrix4_look_at_f32(camera.position, camera.target, {0, 1, 0})
+
 			// Bind graphics pipeline
 			sdl.BindGPUGraphicsPipeline(render_pass, pipeline)
 
@@ -264,7 +329,7 @@ main :: proc() {
 				render_pass,
 				cmd_buffer,
 				sampler,
-				{0, -1, -3},
+				{0, 0, 0},
 				{0, rotation_angle, 0},
 			)
 
