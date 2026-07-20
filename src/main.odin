@@ -1,10 +1,10 @@
 package graphics
 
+import "../libs/shadercross"
 import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
-import "libs/shadercross"
 import sdl "vendor:sdl3"
 
 Camera :: struct {
@@ -235,9 +235,9 @@ main :: proc() {
 	load_default_textures()
 
 	// Load Model
-	model := load_model("./assets/animal-elephant.glb")
-	// model := load_model_with_texture("./assets/animal-elephant.glb", "./assets/colormap.png")
-	// model := load_model("./assets/Mannequin_F.glb")
+	model := load_model("animal-elephant.glb")
+	// model := load_model_with_texture("animal-elephant.glb", "colormap.png")
+	// model := load_model("Mannequin_F.glb")
 
 	gpu_model := upload_model(&model, device)
 	defer free_gpu_model(&gpu_model, device)

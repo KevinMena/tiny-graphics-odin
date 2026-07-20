@@ -8,6 +8,9 @@ import "vendor:cgltf"
 import sdl "vendor:sdl3"
 import sdl_image "vendor:sdl3/image"
 
+MODELS_PATH :: "assets/models"
+TEXTURES_PATH :: "assets/textures"
+
 loaded_textures: map[int]^sdl.Surface
 loaded_textures_id: map[string]int
 
@@ -68,7 +71,8 @@ get_world_matrix :: proc(node: ^cgltf.node) -> linalg.Matrix4f32 {
 	return world_matrix
 }
 
-load_model :: proc(file_path: string) -> (model: Model) {
+load_model :: proc(file_name: string) -> (model: Model) {
+	file_path, _ := filepath.join({MODELS_PATH, file_name}, context.temp_allocator)
 	c_file_path := strings.clone_to_cstring(file_path, context.temp_allocator)
 
 	// 1. Parse the JSON structure
@@ -132,13 +136,9 @@ load_model :: proc(file_path: string) -> (model: Model) {
 
 				if img.uri != nil {
 					uri_str := string(img.uri)
-					base_dir := filepath.dir(file_path)
-					full_path, err := filepath.join({base_dir, uri_str}, context.temp_allocator)
 
-					c_path := strings.clone_to_cstring(full_path, context.temp_allocator)
-					texture_image := sdl_image.Load(c_path)
-
-					texture_id := load_texture(full_path)
+					tex_file_name := filepath.base(uri_str)
+					texture_id := load_texture(tex_file_name)
 					model.materials[j].texture_id = texture_id
 				} else if img.buffer_view != nil {
 					model.materials[j].texture_id = load_texture_raw_data(
@@ -182,7 +182,7 @@ load_model :: proc(file_path: string) -> (model: Model) {
 
 				#partial switch attribute.type {
 				case .position:
-					if positions != nil do log.warnf("[%s] Vertices attribute data already loaded", file_path)
+					if positions != nil do log.warnf("[%s] Vertices attribute data already loaded", file_name)
 					else {
 						positions = make([]Vector3, accessor.count)
 						for v in 0 ..< accessor.count {
@@ -193,7 +193,7 @@ load_model :: proc(file_path: string) -> (model: Model) {
 						}
 					}
 				case .texcoord:
-					if uvs != nil do log.warnf("[%s] Uvs attribute data already loaded", file_path)
+					if uvs != nil do log.warnf("[%s] Uvs attribute data already loaded", file_name)
 					else {
 						uvs = make([]Vector2, accessor.count)
 						for v in 0 ..< accessor.count {
@@ -204,7 +204,7 @@ load_model :: proc(file_path: string) -> (model: Model) {
 						}
 					}
 				case .color:
-					if colors != nil do log.warnf("[%s] Colors attribute data already loaded", file_path)
+					if colors != nil do log.warnf("[%s] Colors attribute data already loaded", file_name)
 					else {
 						colors = make([]Vector4, accessor.count)
 						for v in 0 ..< accessor.count {
@@ -242,7 +242,7 @@ load_model :: proc(file_path: string) -> (model: Model) {
 			if primitive.indices != nil && primitive.indices.buffer_view != nil {
 				accesor := primitive.indices
 
-				if model.meshes[mesh_index].indices != nil do log.warnf("[%s] Indices attribute data already loaded", file_path)
+				if model.meshes[mesh_index].indices != nil do log.warnf("[%s] Indices attribute data already loaded", file_name)
 				else {
 					model.meshes[mesh_index].indices = make([]u32, accesor.count)
 					for i in 0 ..< accesor.count {
@@ -293,15 +293,16 @@ load_default_material :: proc() -> Material {
 load_default_textures :: proc() {
 	// For now just load one thing, but we might need to iterate
 	// over all the textures in the directory
-	load_texture("./assets/defaults/white_default.png")
+	load_texture("default/white_default.png")
 }
 
-load_texture :: proc(texture_path: string) -> int {
+load_texture :: proc(tex_file_name: string) -> int {
 
-	if t_id, t_ok := loaded_textures_id[texture_path]; t_ok {
+	if t_id, t_ok := loaded_textures_id[tex_file_name]; t_ok {
 		return t_id
 	}
 
+	texture_path, _ := filepath.join({TEXTURES_PATH, tex_file_name}, context.temp_allocator)
 	c_texture_path := strings.clone_to_cstring(texture_path, context.temp_allocator)
 
 	texture_image := sdl_image.Load(c_texture_path)
@@ -313,7 +314,7 @@ load_texture :: proc(texture_path: string) -> int {
 
 	texture_id := len(loaded_textures)
 	loaded_textures[texture_id] = texture_image
-	loaded_textures_id[texture_path] = texture_id
+	loaded_textures_id[tex_file_name] = texture_id
 
 	free_all(context.temp_allocator)
 

@@ -1,7 +1,7 @@
 package graphics
 
+import "../libs/shadercross"
 import "core:strings"
-import "libs/shadercross"
 import sdl "vendor:sdl3"
 
 VertexUniform :: struct {
@@ -12,7 +12,7 @@ FragmentUniform :: struct {
 	color: Vector4,
 }
 
-shader_code := #load("assets/shaders/basic.hlsl", string)
+shader_code := #load("../assets/shaders/basic.hlsl", string)
 
 compile_shader_stage :: proc(
 	raw_code: string,
