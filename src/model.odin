@@ -4,6 +4,8 @@ import "core:math/linalg"
 import "core:mem"
 import sdl "vendor:sdl3"
 
+MODELS_PATH :: "assets/models"
+
 Vertex :: struct {
 	pos:   Vector3,
 	uv:    Vector2,
@@ -46,13 +48,16 @@ GPUModel :: struct {
 	textures_data: []GPUTextureData,
 }
 
-free_gpu_model :: proc(gpu_model: ^GPUModel, device: ^sdl.GPUDevice) {
-	sdl.ReleaseGPUBuffer(device, gpu_model.vertex_buffer)
-	sdl.ReleaseGPUBuffer(device, gpu_model.index_buffer)
+load_model :: proc(file_name: string) -> (gpu_model: GPUModel) {
+	model := parse_model(file_name)
 
-	for data in gpu_model.textures_data {
-		sdl.ReleaseGPUTexture(device, data.texture)
-	}
+	return upload_model(&model, d.device)
+}
+
+load_model_with_texture :: proc(file_name: string, texture_name: string) -> (gpu_model: GPUModel) {
+	model := parse_model_with_texture(file_name, texture_name)
+
+	return upload_model(&model, d.device)
 }
 
 upload_model :: proc(model: ^Model, device: ^sdl.GPUDevice) -> (gpu_model: GPUModel) {
@@ -233,13 +238,11 @@ draw_model :: proc(
 	cmd_buffer: ^sdl.GPUCommandBuffer,
 	sampler: ^sdl.GPUSampler,
 	position: Vector3 = {0, 0, 0},
-	rotation: Vector3 = {0, 0, 0},
+	rotation: Quaternion = 1,
 	scale: f32 = 1.0,
 ) {
 	// Calculate UBO
-	model_mat :=
-		linalg.matrix4_translate_f32(position) *
-		linalg.matrix4_from_euler_angles_xyz_f32(rotation.x, rotation.y, rotation.z)
+	model_mat := linalg.matrix4_from_trs_f32(position, rotation, {scale, scale, scale})
 
 	ubo := VertexUniform {
 		mvp = proj_mat * view_mat * model_mat,
@@ -284,5 +287,14 @@ draw_model :: proc(
 			gpu_mesh.vertex_offset,
 			0,
 		)
+	}
+}
+
+free_gpu_model :: proc(gpu_model: ^GPUModel, device: ^sdl.GPUDevice) {
+	sdl.ReleaseGPUBuffer(device, gpu_model.vertex_buffer)
+	sdl.ReleaseGPUBuffer(device, gpu_model.index_buffer)
+
+	for data in gpu_model.textures_data {
+		sdl.ReleaseGPUTexture(device, data.texture)
 	}
 }

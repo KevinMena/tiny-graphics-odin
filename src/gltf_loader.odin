@@ -5,14 +5,7 @@ import "core:math/linalg"
 import "core:path/filepath"
 import "core:strings"
 import "vendor:cgltf"
-import sdl "vendor:sdl3"
-import sdl_image "vendor:sdl3/image"
 
-MODELS_PATH :: "assets/models"
-TEXTURES_PATH :: "assets/textures"
-
-loaded_textures: map[int]^sdl.Surface
-loaded_textures_id: map[string]int
 
 gltf_assert :: proc(ok: bool, message: string) {
 	if !ok do log.panicf(message)
@@ -71,7 +64,7 @@ get_world_matrix :: proc(node: ^cgltf.node) -> linalg.Matrix4f32 {
 	return world_matrix
 }
 
-load_model :: proc(file_name: string) -> (model: Model) {
+parse_model :: proc(file_name: string) -> (model: Model) {
 	file_path, _ := filepath.join({MODELS_PATH, file_name}, context.temp_allocator)
 	c_file_path := strings.clone_to_cstring(file_path, context.temp_allocator)
 
@@ -141,9 +134,15 @@ load_model :: proc(file_name: string) -> (model: Model) {
 					texture_id := load_texture(tex_file_name)
 					model.materials[j].texture_id = texture_id
 				} else if img.buffer_view != nil {
+					data_ptr := cast([^]u8)img.buffer_view.buffer.data
+					start := img.buffer_view.offset
+					size := uint(img.buffer_view.size)
+
 					model.materials[j].texture_id = load_texture_raw_data(
 						img.name,
-						img.buffer_view,
+						data_ptr,
+						start,
+						size,
 					)
 				}
 			}
@@ -270,10 +269,10 @@ load_model :: proc(file_name: string) -> (model: Model) {
 	return
 }
 
-load_model_with_texture :: proc(file_path: string, texture_path: string) -> (model: Model) {
-	model = load_model(file_path)
+parse_model_with_texture :: proc(file_name: string, texture_name: string) -> (model: Model) {
+	model = parse_model(file_name)
 
-	texture_id := load_texture(texture_path)
+	texture_id := load_texture(texture_name)
 
 	// Insert texture to the model
 	for i in 0 ..< len(model.meshes) {
@@ -284,69 +283,4 @@ load_model_with_texture :: proc(file_path: string, texture_path: string) -> (mod
 	free_all(context.temp_allocator)
 
 	return
-}
-
-load_default_material :: proc() -> Material {
-	return Material{texture_id = 0, color = WHITE}
-}
-
-load_default_textures :: proc() {
-	// For now just load one thing, but we might need to iterate
-	// over all the textures in the directory
-	load_texture("default/white_default.png")
-}
-
-load_texture :: proc(tex_file_name: string) -> int {
-
-	if t_id, t_ok := loaded_textures_id[tex_file_name]; t_ok {
-		return t_id
-	}
-
-	texture_path, _ := filepath.join({TEXTURES_PATH, tex_file_name}, context.temp_allocator)
-	c_texture_path := strings.clone_to_cstring(texture_path, context.temp_allocator)
-
-	texture_image := sdl_image.Load(c_texture_path)
-
-	if texture_image == nil {
-		log.warnf("SDL Warning: %s", sdl.GetError())
-		return 0
-	}
-
-	texture_id := len(loaded_textures)
-	loaded_textures[texture_id] = texture_image
-	loaded_textures_id[tex_file_name] = texture_id
-
-	free_all(context.temp_allocator)
-
-	return texture_id
-}
-
-load_texture_raw_data :: proc(name: cstring, buffer_view: ^cgltf.buffer_view) -> int {
-	name_string := strings.clone_from_cstring(name, context.temp_allocator)
-
-	if t, t_ok := loaded_textures_id[name_string]; t_ok {
-		return t
-	}
-
-	data_ptr := cast([^]u8)buffer_view.buffer.data
-	start := buffer_view.offset
-
-	stream := sdl.IOFromConstMem(&data_ptr[start], uint(buffer_view.size))
-
-	texture_id := len(loaded_textures)
-	loaded_textures[texture_id] = sdl_image.Load_IO(stream, true)
-	loaded_textures_id[name_string] = texture_id
-
-	free_all(context.temp_allocator)
-
-	return texture_id
-}
-
-get_texture :: proc(id: int) -> ^sdl.Surface {
-	if t, t_ok := loaded_textures[id]; t_ok {
-		return t
-	}
-
-	log.warnf("Framework Warning: Texture not found. Returning default texture")
-	return loaded_textures[0]
 }

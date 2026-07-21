@@ -6,6 +6,7 @@ Dependencies:
 - Shadercross
 - SDL_Image
 - cgltf
+- Odin ImGui (Dear ImGui Bindings)
 
 # Screenshots
 
@@ -16,3 +17,5 @@ Dependencies:
 ![First Model](screenshots/model_loaded.png)
 
 ![Model with material](screenshots/materials.png)
+
+![Imgui and Movement](screenshots/imgui_movement.png)
