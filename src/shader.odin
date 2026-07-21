@@ -1,7 +1,7 @@
 package graphics
 
-import "../libs/shadercross"
 import "core:strings"
+import "libs:shadercross"
 import sdl "vendor:sdl3"
 
 VertexUniform :: struct {

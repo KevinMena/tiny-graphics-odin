@@ -1,10 +1,13 @@
 package graphics
 
-import "../libs/shadercross"
 import "base:runtime"
 import "core:log"
 import "core:math"
 import "core:math/linalg"
+import "libs:shadercross"
+import im "shared:imgui"
+import im_sdl "shared:imgui/imgui_impl_sdl3"
+import im_sdlgpu "shared:imgui/imgui_impl_sdlgpu3"
 import sdl "vendor:sdl3"
 
 Camera :: struct {
@@ -137,6 +140,21 @@ get_depth_format :: proc() -> sdl.GPUTextureFormat {
 	return .INVALID
 }
 
+free_imgui :: proc() {
+	im_sdl.Shutdown()
+	im_sdlgpu.Shutdown()
+}
+
+@(deferred_none = free_imgui)
+init_imgui :: proc() {
+	im.CHECKVERSION()
+	im.CreateContext()
+	im_sdl.InitForSDLGPU(window)
+	im_sdlgpu.Init(
+		&{Device = device, ColorTargetFormat = sdl.GetGPUSwapchainTextureFormat(device, window)},
+	)
+}
+
 free_pipeline :: proc() {
 	sdl.ReleaseGPUSampler(device, sampler)
 	sdl.ReleaseGPUGraphicsPipeline(device, pipeline)
@@ -243,6 +261,7 @@ main :: proc() {
 	context.logger = log.create_console_logger()
 
 	init_sdl()
+	init_imgui()
 
 	// Load default textures
 	load_default_textures()
@@ -259,6 +278,7 @@ main :: proc() {
 	setup_pipeline()
 
 	rotation_angle: f32
+	rotate := true
 	proj_mat = linalg.matrix4_perspective_f32(
 		linalg.to_radians(f32(60)),
 		f32(window_size.x) / f32(window_size.y),
@@ -278,6 +298,7 @@ main :: proc() {
 
 	key_down = sdl.GetKeyboardState(nil)
 	last_ticks := sdl.GetTicks()
+	clear_color := sdl.FColor{0.1, 0.15, 0.25, 1.0}
 
 	for running {
 		free_all(context.temp_allocator)
@@ -287,8 +308,12 @@ main :: proc() {
 		delta_time := f32(current_ticks - last_ticks) / 1000
 		last_ticks = current_ticks
 
+		ui_input_mode := !sdl.GetWindowRelativeMouseMode(window)
+
 		// Poll events
 		for sdl.PollEvent(&event) {
+			if ui_input_mode do im_sdl.ProcessEvent(&event)
+
 			#partial switch event.type {
 			case .QUIT:
 				log.debug("Quit event received. Shutting down framework...")
@@ -298,14 +323,33 @@ main :: proc() {
 					log.debug("Quit event received. Shutting down framework...")
 					running = false
 				}
+			case .MOUSE_BUTTON_DOWN:
+				if event.button.button == 2 {
+					log.debugf("MOUSE BUTTON PRESSED")
+					ui_input_mode = !ui_input_mode
+					_ = sdl.SetWindowRelativeMouseMode(window, !ui_input_mode)
+				}
 			}
 		}
 
-		_ = sdl.GetRelativeMouseState(&mouse_delta.x, &mouse_delta.y)
+		if !ui_input_mode {
+			key_down = sdl.GetKeyboardState(nil)
+			_ = sdl.GetRelativeMouseState(&mouse_delta.x, &mouse_delta.y)
+		}
+
+		im_sdlgpu.NewFrame()
+		im_sdl.NewFrame()
+		im.NewFrame()
+
+		if im.Begin("Inspector") {
+			im.ColorEdit3("Clear Color", transmute(^[3]f32)&clear_color)
+			im.Checkbox("Rotate", &rotate)
+		}
+		im.End()
 
 		// Update game
 		update_camera(&camera, &look, delta_time)
-		rotation_angle += linalg.to_radians(f32(90)) * delta_time
+		if rotate do rotation_angle += linalg.to_radians(f32(90)) * delta_time
 
 		// Render
 		// 1. Acquire command buffer
@@ -313,11 +357,15 @@ main :: proc() {
 		// 2. Acquire swapchain texture
 		swapchain_tex: ^sdl.GPUTexture
 
+		// IMGUI Rendering
+		im.Render()
+		im_draw_data := im.GetDrawData()
+
 		if sdl.WaitAndAcquireGPUSwapchainTexture(cmd_buffer, window, &swapchain_tex, nil, nil) {
 			// 3. Begin Render pass
 			color_target := sdl.GPUColorTargetInfo {
 				texture     = swapchain_tex,
-				clear_color = {0.1, 0.15, 0.25, 1.0},
+				clear_color = clear_color,
 				load_op     = .CLEAR,
 				store_op    = .STORE,
 			}
@@ -350,6 +398,19 @@ main :: proc() {
 			sdl.EndGPURenderPass(render_pass)
 
 			// 6. More render passes if needed
+			// IMGUI Render pass
+			if im_draw_data.DisplaySize.x > 0 && im_draw_data.DisplaySize.y > 0 {
+				im_sdlgpu.PrepareDrawData(im_draw_data, cmd_buffer)
+				im_color_target := sdl.GPUColorTargetInfo {
+					texture  = swapchain_tex,
+					load_op  = .LOAD,
+					store_op = .STORE,
+				}
+
+				im_render_pass := sdl.BeginGPURenderPass(cmd_buffer, &im_color_target, 1, nil)
+				im_sdlgpu.RenderDrawData(im_draw_data, cmd_buffer, im_render_pass)
+				sdl.EndGPURenderPass(im_render_pass)
+			}
 		}
 
 		// 7. Submit to command buffer
