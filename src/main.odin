@@ -70,7 +70,7 @@ main :: proc() {
 	// model := load_model_with_texture("animal-elephant.glb", "colormap.png")
 	// model := load_model("Mannequin_F.glb")
 
-	defer free_gpu_model(&model, d.device)
+	defer free_model(&model, d.device)
 
 	rotation_angle: Quaternion = 1
 	rotate := true

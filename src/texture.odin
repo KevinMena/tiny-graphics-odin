@@ -66,6 +66,15 @@ get_texture :: proc(id: int) -> ^sdl.Surface {
 	return d.loaded_textures[0]
 }
 
+get_gpu_texture :: proc(id: int) -> ^sdl.GPUTexture {
+	if t, t_ok := d.loaded_textures_gpu[id]; t_ok {
+		return t
+	}
+
+	log.warnf("Framework Warning: Texture not found. Returning default texture")
+	return d.loaded_textures_gpu[0]
+}
+
 load_default_material :: proc() -> Material {
 	return Material{texture_id = 0, color = WHITE}
 }

@@ -30,6 +30,7 @@ RendererData :: struct {
 	sampler:              ^sdl.GPUSampler,
 	loaded_textures:      map[int]^sdl.Surface,
 	loaded_textures_id:   map[string]int,
+	loaded_textures_gpu:  map[int]^sdl.GPUTexture,
 }
 
 RenderContext :: struct {
@@ -54,6 +55,10 @@ init :: proc() {
 }
 
 quit :: proc() {
+	for id, texture in d.loaded_textures_gpu {
+		sdl.ReleaseGPUTexture(d.device, texture)
+	}
+
 	free_pipeline()
 	free_imgui()
 	free_sdl()
